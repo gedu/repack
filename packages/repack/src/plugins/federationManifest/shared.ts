@@ -122,7 +122,15 @@ export function buildSharedEntries(
 ): FederationManifestSharedEntry[] {
   const versionCache = new Map<string, string>();
 
-  return normalizeSharedEntries(shared).map(({ name, config }) => {
+  // Skip synthetic deep-import sharing keys with a trailing slash (e.g.
+  // `react-native/`, `@react-native/`) auto-injected by the federation
+  // plugins. They are webpack prefix-matching markers, not real packages,
+  // so they carry no shareable version information.
+  const names = normalizeSharedEntries(shared).filter(
+    ({ name }) => !name.endsWith('/')
+  );
+
+  return names.map(({ name, config }) => {
     if (!versionCache.has(name)) {
       versionCache.set(name, resolveInstalledVersion(name, context));
     }

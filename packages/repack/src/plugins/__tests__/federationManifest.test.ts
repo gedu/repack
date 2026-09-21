@@ -133,7 +133,6 @@ describe('buildSharedEntries', () => {
       buildSharedEntries(
         {
           react: { singleton: true, eager: true, requiredVersion: '^18.0.0' },
-          'react-native/': { singleton: true, eager: true },
           'not-installed': { singleton: true },
         },
         FIXTURES_CONTEXT
@@ -147,13 +146,6 @@ describe('buildSharedEntries', () => {
         requiredVersion: '^18.0.0',
       },
       {
-        name: 'react-native/',
-        version: '0.0.0-fixture',
-        singleton: true,
-        eager: true,
-        requiredVersion: '*',
-      },
-      {
         name: 'not-installed',
         version: 'unknown',
         singleton: true,
@@ -161,6 +153,18 @@ describe('buildSharedEntries', () => {
         requiredVersion: '*',
       },
     ]);
+  });
+
+  it('skips synthetic deep-import sharing keys with a trailing slash', () => {
+    const entries = buildSharedEntries(
+      {
+        react: { singleton: true },
+        'react-native/': { singleton: true },
+        '@react-native/': { singleton: true },
+      },
+      FIXTURES_CONTEXT
+    );
+    expect(entries.map((entry) => entry.name)).toEqual(['react']);
   });
 
   it('normalizes array configs with string and wrapper entries', () => {

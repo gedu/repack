@@ -377,16 +377,14 @@ describe('ModuleFederationPlugin', () => {
       name: 'app1',
       metaData: { type: 'remote' },
     });
-    expect(
-      manifest.shared.map((entry: { name: string }) => entry.name)
-    ).toEqual(
-      expect.arrayContaining([
-        'react',
-        'react-native',
-        'react-native/',
-        '@react-native/',
-      ])
+    const sharedNames = manifest.shared.map(
+      (entry: { name: string }) => entry.name
     );
+    expect(sharedNames).toEqual(expect.arrayContaining(['react', 'react-native']));
+    // Synthetic deep-import prefixes injected by the plugin must not leak
+    // into the manifest as fake shared dependencies
+    expect(sharedNames).not.toContain('react-native/');
+    expect(sharedNames).not.toContain('@react-native/');
     expect(
       manifest.shared.find((entry: { name: string }) => entry.name === 'react')
     ).toMatchObject({
