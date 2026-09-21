@@ -133,6 +133,11 @@ export const federationDoctorCommandOptions = [
     description:
       'Additionally compare every remote pair for shared-dependency drift (shared checks only; native checks stay host-to-remote)',
   },
+  {
+    name: '--dry-run',
+    description:
+      'Pre-build mode: check shared version alignment, expected-library provisioning and config sanity from package.json and bundler configs only — no builds, no manifest fetches. Every finding carries an unbuilt caveat',
+  },
 ];
 
 export const bundleCommandOptions = [

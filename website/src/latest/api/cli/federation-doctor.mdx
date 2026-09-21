@@ -43,6 +43,9 @@ npx react-native federation-doctor
 
 # also compare remotes against each other (shared checks only)
 npx react-native federation-doctor --pairwise
+
+# pre-build checks — no builds, no manifests
+npx react-native federation-doctor --dry-run
 ```
 
 Each finding carries a severity (`error`, `warning`, `info`), a stable code (for example `SHARED_VERSION_DRIFT`, `MISSING_NATIVE_MODULE`, `MISSING_REMOTE_MANIFEST`), and a message naming the package and the versions in conflict.
@@ -80,6 +83,18 @@ Downgrade `MISSING_REMOTE_MANIFEST` from error to warning. Use it while rolling 
 - Type: `boolean`
 
 Additionally compare every remote pair for shared-dependency drift (every `remote_i`/`remote_j` combination). Off by default — the host↔remote checks already cover every remote, and pairwise adds `O(n²)` findings. Only the shared checks run between remotes; native-module checks stay host↔remote because the host is the native provider. Enabling it never changes the host↔remote checks or their severities.
+
+### `--dry-run`
+
+- Type: `boolean`
+
+Pre-build mode: validate the federation workspace **before anything is built**. Inputs come only from the apps' `package.json` files, their bundler configurations (evaluated in-process, the same way the bundler loads them) and `repack-federation.json` — the mode performs no build, no app run and no manifest fetch, so remotes that were never built raise no `MISSING_REMOTE_MANIFEST` finding. It checks:
+
+- **Version alignment** across host and remotes from the versions actually installed per app root, reusing the manifest-mode finding codes verbatim (`SHARED_VERSION_DRIFT`, `VERSION_UNKNOWN`, `SINGLETON_MISMATCH`, the eager advisories).
+- **Expected-library coverage**: every library the remote's `package.json` shares with the host but the host's shared configuration does not provide is reported as `MISSING_SHARED_PROVIDER` (warning — this is a both-declared heuristic, never an error).
+- **Config sanity**: the workspace config loads and every app config evaluates; a config that throws or instantiates no federation plugin is "could not run" — exit 2, message only.
+
+App roots come from the `root` fields of `repack-federation.json` (defaulting to the config file's directory). Because nothing here is manifest-backed, **every** dry-run finding carries an explicit unbuilt caveat in its message: `[dry-run: derived from package.json and bundler configs before any build; not verified against built manifests]` — in text and JSON output alike; the `--format json` shape is unchanged. The exit-code contract (0/1/2) is identical to the post-build mode.
 
 ## Report ordering
 

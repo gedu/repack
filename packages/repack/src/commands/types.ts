@@ -55,6 +55,8 @@ export interface FederationDoctorArguments {
   allowMissingManifests?: boolean;
   /** Also compare every remote pair, shared-dependency checks only. */
   pairwise?: boolean;
+  /** Pre-build mode over package.json + bundler configs; never reads manifests. */
+  dryRun?: boolean;
 }
 
 export interface CliConfig {

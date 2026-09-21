@@ -3,6 +3,7 @@ import {
   ConfigFileInvalidError,
   resolveFederationWorkspace,
 } from './federation/configFile.js';
+import type { DoctorReport } from './federation/doctor.js';
 import {
   type DoctorRemoteInput,
   doctorExitCode,
@@ -10,6 +11,8 @@ import {
   formatDoctorReport,
   runDoctor,
 } from './federation/doctor.js';
+import { collectDryRunInput, runDryRun } from './federation/dryRun.js';
+import { ConfigEvalError } from './federation/extractShared.js';
 import {
   type LoadedManifest,
   loadManifest,
@@ -76,6 +79,33 @@ export async function federationDoctor(
         'of remote manifest sources.'
     );
     process.exit(2);
+    return;
+  }
+
+  if (args.dryRun) {
+    // Pre-build mode: inputs come from package.json files and evaluated
+    // bundler configs only — no builds, no app runs, no manifest fetches.
+    // A config that cannot be evaluated is "could not run": exit 2, message
+    // only, never a stack. Exit codes come from the shared contract.
+    let report: DoctorReport;
+    try {
+      report = runDryRun(await collectDryRunInput(process.cwd(), workspace));
+    } catch (error) {
+      if (error instanceof ConfigEvalError) {
+        console.error(`Federation dry-run — ${error.message}`);
+        process.exit(2);
+        return;
+      }
+      throw error;
+    }
+
+    if (args.format === 'json') {
+      console.log(doctorReportToJson(report));
+    } else {
+      console.log(formatDoctorReport(report));
+    }
+
+    process.exit(doctorExitCode(report));
     return;
   }
 

@@ -161,6 +161,15 @@ export class ModuleFederationPluginV2 {
     }
   }
 
+  /**
+   * Returns the `shared` option exactly as it was passed to the constructor,
+   * before any deep-import injection — tooling (`federation-doctor --dry-run`,
+   * `federation-init`) reads what the user wrote, not what the plugin emits.
+   */
+  getSharedConfiguration(): unknown {
+    return this.config.shared;
+  }
+
   private adaptRuntimePlugins(
     context: string,
     runtimePlugins: string[] | undefined = []

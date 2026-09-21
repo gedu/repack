@@ -125,6 +125,15 @@ export class ModuleFederationPluginV1 {
   }
 
   /**
+   * Returns the `shared` option exactly as it was passed to the constructor,
+   * before any deep-import injection — tooling (`federation-doctor --dry-run`,
+   * `federation-init`) reads what the user wrote, not what the plugin emits.
+   */
+  getSharedConfiguration(): unknown {
+    return this.config.shared;
+  }
+
+  /**
    * This method provides compatibility between webpack and Rspack for the ModuleFederation plugin.
    * In Rspack, Module Federation 1.5 is implemented under the name that's used in webpack for the original version.
    * This method adjusts for this naming difference to ensure we use the correct plugin version.

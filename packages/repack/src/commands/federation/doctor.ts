@@ -89,8 +89,11 @@ function checkManifestVersion(
  * host-eager/remote-lazy convention, remote↔remote reports any mismatch as an
  * advisory — no convention orders two remotes (the host arbitrates their
  * shares).
+ *
+ * Exported for `dryRun.ts`, which feeds it manifest-shaped virtual entries
+ * derived from bundler configs instead of built manifests.
  */
-function checkSharedDeps(
+export function checkSharedDeps(
   left: FederationManifest,
   leftLabel: string,
   right: FederationManifest,

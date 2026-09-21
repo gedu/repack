@@ -284,3 +284,90 @@ describe('federation-doctor with repack-federation.json', () => {
     expect(exit).toHaveBeenCalledWith(withPort.code);
   });
 });
+
+describe('federation-doctor --dry-run', () => {
+  // Capability fixtures live OUTSIDE __tests__ (jest testMatch would collect
+  // any .ts there): up two levels, into commands/federation/__fixtures__.
+  const WORKSPACE = path.join(
+    FIXTURES,
+    '..',
+    '..',
+    '__fixtures__',
+    'dry-run-workspace'
+  );
+  let cwdSpy: jest.SpyInstance;
+
+  function fromDir(dir: string) {
+    cwdSpy = jest.spyOn(process, 'cwd').mockReturnValue(dir);
+  }
+
+  afterEach(() => {
+    cwdSpy?.mockRestore();
+  });
+
+  it('catches injected version divergence with zero builds and exits 1', async () => {
+    fromDir(path.join(WORKSPACE, 'drift'));
+    await federationDoctor([], cliConfig, { dryRun: true });
+
+    expect(stdout()).toContain('SHARED_VERSION_DRIFT');
+    expect(stdout()).toContain('9.9.9');
+    expect(stdout()).toContain('9.8.7');
+    // The unbuilt caveat rides every finding message, text mode included.
+    expect(stdout()).toContain('dry-run');
+    expect(stdout()).toContain('not verified against built manifests');
+    expect(exit).toHaveBeenCalledWith(1);
+  });
+
+  it('never reports MISSING_REMOTE_MANIFEST — no manifests are consulted', async () => {
+    // The fixture workspace has NO build output at all: every manifest path
+    // in repack-federation.json points at a directory that does not exist.
+    fromDir(path.join(WORKSPACE, 'clean'));
+    await federationDoctor([], cliConfig, { dryRun: true });
+
+    expect(stdout()).not.toContain('MISSING_REMOTE_MANIFEST');
+    expect(exit).toHaveBeenCalledWith(0);
+  });
+
+  it('exits 2 on a hostile app config, printing a message and no stack', async () => {
+    fromDir(path.join(WORKSPACE, 'hostile'));
+    await federationDoctor([], cliConfig, { dryRun: true });
+
+    const printed = error.mock.calls.map(([line]) => String(line)).join('\n');
+    expect(printed).toContain('kaboom');
+    expect(printed).not.toMatch(/\n\s+at\s+\S/);
+    expect(log).not.toHaveBeenCalled();
+    expect(exit).toHaveBeenCalledWith(2);
+  });
+
+  it('exits 2 on a malformed repack-federation.json under --dry-run too', async () => {
+    const malformedDir = path.join(tmpDir, 'dryrun-malformed');
+    fs.mkdirSync(malformedDir, { recursive: true });
+    fs.writeFileSync(
+      path.join(malformedDir, 'repack-federation.json'),
+      '{ "host": { "manifest":\n'
+    );
+    fromDir(malformedDir);
+    await federationDoctor([], cliConfig, { dryRun: true });
+
+    expect(error).toHaveBeenCalledWith(
+      expect.stringContaining('Federation config')
+    );
+    expect(exit).toHaveBeenCalledWith(2);
+  });
+
+  it('keeps the locked --format json shape with the caveat inside messages', async () => {
+    fromDir(path.join(WORKSPACE, 'drift'));
+    await federationDoctor([], cliConfig, { dryRun: true, format: 'json' });
+
+    expect(log).toHaveBeenCalledTimes(1);
+    const parsed = JSON.parse(log.mock.calls[0][0] as string) as {
+      findings: Array<Record<string, string>>;
+    };
+    expect(parsed.findings.length).toBeGreaterThan(0);
+    for (const finding of parsed.findings) {
+      expect(Object.keys(finding)).toEqual(['severity', 'code', 'message']);
+      expect(finding.message).toContain('not verified against built manifests');
+    }
+    expect(exit).toHaveBeenCalledWith(1);
+  });
+});
