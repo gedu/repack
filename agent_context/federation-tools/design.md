@@ -146,13 +146,30 @@ Each PR is shippable alone and lands with docs in the same PR.
 - **PR 1 — Manifest emission.** `manifest` option on V1+V2, schema v1,
   resolved versions, native module block, dev-server allowlist, unit tests,
   docs page (`website/src/latest/docs/features/`), agent_context kept in sync.
-- **PR 2 — Manifest inspection CLI.** `repack federation manifest <path|url>`:
+- **PR 2 — Manifest inspection CLI.** `federation-manifest <path|url>`:
   pretty-prints a manifest (local file, built output dir, or remote URL).
   Trivially useful, first consumer, validates schema ergonomics.
-- **PR 3 — `repack federation doctor`.** Inputs: host + list of remotes
+- **PR 3 — `federation-doctor`.** Inputs: host + list of remotes
   (local paths or URLs). Compares manifests: shared-version/range drift,
   singleton/eager mismatches, native modules the host does not declare.
   `--format json` + exit codes so it runs as a CI gate (multi-repo story).
+  - **Command surface correction (as shipped).** There is no `repack`
+    binary and no `repack federation ...` subcommand tree. Both commands are
+    flat entries in the RN Community CLI `commands` array
+    (`packages/repack/src/commands/index.ts`, surfaced through
+    `react-native.config.js`), invoked as
+    `npx react-native federation-manifest|federation-doctor`.
+    `createBoundCommands` (deprecated webpack/rspack entry points) excludes
+    them — they are bundler-independent.
+  - **Exit codes locked:** `0` clean (warnings/infos allowed); `1` drift —
+    any error-severity finding, including `MISSING_REMOTE_MANIFEST` unless
+    `--allow-missing-manifests` downgrades it to a warning; `2` the check
+    could not run — missing required option, host manifest not found, or a
+    corrupt (invalid) manifest on any side. 2 means "no answer", 1 means
+    "bad answer"; CI treats both as failure.
+  - **No degraded host fallback.** The host must ship a manifest; the
+    doctor does not fall back to `package.json` heuristics (closes the open
+    decision below).
 - **PR 4 — Single-source shared config + retrofit.** `defineShared()` helper
   (or shared `shared.config.ts` convention) deriving versions from real
   `package.json`; codemod `repack federation init` that generates/repairs
@@ -179,9 +196,9 @@ conflict, and a docs page with copy-pasteable examples.
 - [x] `buildVersion` source: chain implemented in PR 1 — `git rev-parse
   --short HEAD` in `compiler.context` (non-fatal), else root `package.json`
   `version`, else `"unknown"`.
-- [ ] Doctor host input: does the host need the manifest option enabled, or
-  may the doctor fall back to `package.json` heuristics with a `degraded`
-  badge?
+- [x] Doctor host input: resolved at implementation — the host must ship a
+  manifest; missing or corrupt host manifest exits 2, no `package.json`
+  heuristic fallback.
 
 ## PR 1 implementation notes (as built)
 
@@ -221,6 +238,25 @@ Deltas from the design above, all deliberate:
   it; asserted in `federationManifestCompilation.test.ts` against a real
   rspack run plus a direct `AssetsCopyProcessor` memfs test.
 
+
+## PR 2/3 CLI notes (as built)
+
+- **Heuristic honesty, enforced in the doctor:** a host native list is
+  trusted only when no `dynamicImportDetected` flag and no
+  `confidence: heuristic` entry is present; otherwise missing-native-module
+  findings downgrade to `HEURISTIC_ADVISORY` warnings. Unsupported
+  `requiredVersion` syntax yields `SHARED_RANGE_UNSUPPORTED` (warning) and
+  unknown singleton versions yield `VERSION_UNKNOWN` (info) — the doctor
+  reports what it cannot check instead of guessing or passing silently.
+- **Host-app-project native-module caveat:** the host manifest's
+  `nativeModules` is node_modules-scope; a module wired from the host's app
+  project won't be listed. `MISSING_NATIVE_MODULE` (error on a trusted host
+  list) names this case in its message and asks for manual verification —
+  the manifest cannot distinguish "absent" from "native to the app project".
+- **Corrupt vs missing asymmetry:** a missing remote manifest is a finding
+  (exit 1, escapable with `--allow-missing-manifests`); a corrupt one aborts
+  with exit 2 — results from an unparseable manifest cannot be trusted, so
+  the escape hatch deliberately does not cover it.
 
 ## Referenced surface (verified 2026-09)
 
