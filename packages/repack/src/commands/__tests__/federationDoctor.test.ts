@@ -246,6 +246,29 @@ describe('federation-doctor with repack-federation.json', () => {
     fs.rmSync(isolated, { recursive: true, force: true });
   });
 
+  it('keeps the 0/1/2 exit-code contract with --pairwise', async () => {
+    fromDir(configFixture('config-valid'));
+    await federationDoctor([], cliConfig, { pairwise: true });
+    expect(exit).toHaveBeenLastCalledWith(0);
+    exit.mockClear();
+
+    fromDir(configFixture('config-drift'));
+    await federationDoctor([], cliConfig, { pairwise: true });
+    expect(exit).toHaveBeenLastCalledWith(1);
+    exit.mockClear();
+    cwdSpy.mockRestore();
+
+    const badDir = path.join(tmpDir, 'pairwise-malformed');
+    fs.mkdirSync(badDir, { recursive: true });
+    fs.writeFileSync(
+      path.join(badDir, 'repack-federation.json'),
+      '{ "host": { "manifest":\n'
+    );
+    fromDir(badDir);
+    await federationDoctor([], cliConfig, { pairwise: true });
+    expect(exit).toHaveBeenLastCalledWith(2);
+  });
+
   it('behaves identically with and without declared ports', async () => {
     fromDir(configFixture('config-valid'));
     await federationDoctor([], cliConfig, {});

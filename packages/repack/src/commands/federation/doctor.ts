@@ -35,7 +35,12 @@ export interface DoctorInput {
   remotes: DoctorRemoteInput[];
   /** Downgrade missing-remote findings from error to warning. */
   allowMissingManifests?: boolean;
+  /** Also compare every remote pair, shared-dependency checks only. */
+  pairwise?: boolean;
 }
+
+/** Which sides a shared-dependency comparison runs between. */
+export type DoctorPairKind = 'host-remote' | 'remote-remote';
 
 function sharedOf(
   manifest: FederationManifest
@@ -77,74 +82,85 @@ function checkManifestVersion(
   }
 }
 
+/**
+ * Compare the shared-dependency blocks of two apps. Labels are preformatted
+ * (`host "shell"`, `remote "store"`) so host↔remote messages keep byte-stable
+ * text; `pairKind` selects the eager policy: host↔remote applies the
+ * host-eager/remote-lazy convention, remote↔remote reports any mismatch as an
+ * advisory — no convention orders two remotes (the host arbitrates their
+ * shares).
+ */
 function checkSharedDeps(
-  host: FederationManifest,
-  remoteName: string,
-  remote: FederationManifest,
-  findings: DoctorFinding[]
+  left: FederationManifest,
+  leftLabel: string,
+  right: FederationManifest,
+  rightLabel: string,
+  findings: DoctorFinding[],
+  pairKind: DoctorPairKind
 ): void {
-  const remoteShared = new Map(
-    sharedOf(remote).map((entry) => [entry.name, entry])
+  const rightShared = new Map(
+    sharedOf(right).map((entry) => [entry.name, entry])
   );
 
-  for (const hostEntry of sharedOf(host)) {
-    const remoteEntry = remoteShared.get(hostEntry.name);
-    if (!remoteEntry) continue;
-    const name = hostEntry.name;
+  for (const leftEntry of sharedOf(left)) {
+    const rightEntry = rightShared.get(leftEntry.name);
+    if (!rightEntry) continue;
+    const name = leftEntry.name;
 
-    if (hostEntry.singleton !== remoteEntry.singleton) {
+    if (leftEntry.singleton !== rightEntry.singleton) {
       findings.push({
         severity: 'error',
         code: 'SINGLETON_MISMATCH',
-        message: `Shared dependency "${name}" is singleton: ${hostEntry.singleton} on host "${host.name}" but ${remoteEntry.singleton} on remote "${remoteName}".`,
+        message: `Shared dependency "${name}" is singleton: ${leftEntry.singleton} on ${leftLabel} but ${rightEntry.singleton} on ${rightLabel}.`,
       });
     }
-    if (hostEntry.eager !== remoteEntry.eager) {
-      const conventional = hostEntry.eager && !remoteEntry.eager; // host-eager / remote-lazy = MF convention
+    if (leftEntry.eager !== rightEntry.eager) {
+      const conventional =
+        pairKind === 'host-remote' && leftEntry.eager && !rightEntry.eager; // host-eager / remote-lazy = MF convention
+      const crossRemote = pairKind === 'remote-remote';
       findings.push({
-        severity: conventional ? 'warning' : 'error',
-        code: conventional ? 'EAGER_ADVISORY' : 'EAGER_MISMATCH',
+        severity: conventional || crossRemote ? 'warning' : 'error',
+        code: conventional || crossRemote ? 'EAGER_ADVISORY' : 'EAGER_MISMATCH',
         message: conventional
-          ? `Shared dependency "${name}" is eager: true on host "${host.name}" but eager: false on remote "${remoteName}" — expected host-eager/remote-lazy convention; reported as advisory.`
-          : `Shared dependency "${name}" is eager: ${hostEntry.eager} on host "${host.name}" but ${remoteEntry.eager} on remote "${remoteName}".`,
+          ? `Shared dependency "${name}" is eager: true on ${leftLabel} but eager: false on ${rightLabel} — expected host-eager/remote-lazy convention; reported as advisory.`
+          : crossRemote
+            ? `Shared dependency "${name}" is eager: ${leftEntry.eager} on ${leftLabel} but ${rightEntry.eager} on ${rightLabel} — no convention orders two remotes; reported as advisory.`
+            : `Shared dependency "${name}" is eager: ${leftEntry.eager} on ${leftLabel} but ${rightEntry.eager} on ${rightLabel}.`,
       });
     }
 
-    const bothSingleton = hostEntry.singleton && remoteEntry.singleton;
-    if (bothSingleton && hostEntry.version !== remoteEntry.version) {
-      if (
-        hostEntry.version === 'unknown' ||
-        remoteEntry.version === 'unknown'
-      ) {
+    const bothSingleton = leftEntry.singleton && rightEntry.singleton;
+    if (bothSingleton && leftEntry.version !== rightEntry.version) {
+      if (leftEntry.version === 'unknown' || rightEntry.version === 'unknown') {
         findings.push({
           severity: 'info',
           code: 'VERSION_UNKNOWN',
-          message: `Shared dependency "${name}" is a singleton but its resolved version could not be determined on at least one side (host: ${hostEntry.version}, remote "${remoteName}": ${remoteEntry.version}); verify they match manually.`,
+          message: `Shared dependency "${name}" is a singleton but its resolved version could not be determined on at least one side (${leftLabel}: ${leftEntry.version}, ${rightLabel}: ${rightEntry.version}); verify they match manually.`,
         });
       } else {
         findings.push({
           severity: 'error',
           code: 'SHARED_VERSION_DRIFT',
-          message: `Singleton shared dependency "${name}" resolves to different versions: host "${host.name}" has ${hostEntry.version}, remote "${remoteName}" has ${remoteEntry.version}. Align the versions (or remove singleton).`,
+          message: `Singleton shared dependency "${name}" resolves to different versions: ${leftLabel} has ${leftEntry.version}, ${rightLabel} has ${rightEntry.version}. Align the versions (or remove singleton).`,
         });
       }
     }
 
     const verdict = rangesIntersect(
-      hostEntry.requiredVersion,
-      remoteEntry.requiredVersion
+      leftEntry.requiredVersion,
+      rightEntry.requiredVersion
     );
     if (verdict === false) {
       findings.push({
         severity: 'warning',
         code: 'SHARED_RANGE_UNRESOLVABLE',
-        message: `Shared dependency "${name}" declares ranges that cannot intersect: host "${host.name}" requires ${hostEntry.requiredVersion}, remote "${remoteName}" requires ${remoteEntry.requiredVersion}.`,
+        message: `Shared dependency "${name}" declares ranges that cannot intersect: ${leftLabel} requires ${leftEntry.requiredVersion}, ${rightLabel} requires ${rightEntry.requiredVersion}.`,
       });
     } else if (verdict === null) {
       findings.push({
         severity: 'warning',
         code: 'SHARED_RANGE_UNSUPPORTED',
-        message: `Shared dependency "${name}" uses a requiredVersion this doctor cannot evaluate (host: ${hostEntry.requiredVersion}, remote "${remoteName}": ${remoteEntry.requiredVersion}); check compatibility manually.`,
+        message: `Shared dependency "${name}" uses a requiredVersion this doctor cannot evaluate (${leftLabel}: ${leftEntry.requiredVersion}, ${rightLabel}: ${rightEntry.requiredVersion}); check compatibility manually.`,
       });
     }
   }
@@ -204,20 +220,57 @@ function checkRemoteManifests(
  * shared-dependency and native-module inconsistency found.
  */
 export function runDoctor(input: DoctorInput): DoctorReport {
-  const findings: DoctorFinding[] = [];
+  // Three buckets, emitted native → shared → meta once EVERY comparison has
+  // run: the report leads with the most fatal crash class, and one remote's
+  // errors never suppress another remote's findings (no fail-fast). The
+  // ordering is report-only; the severity-to-exit-code mapping is unchanged.
+  const native: DoctorFinding[] = [];
+  const shared: DoctorFinding[] = [];
+  const meta: DoctorFinding[] = [];
 
-  checkManifestVersion(input.host, `Host "${input.host.name}"`, findings);
+  checkManifestVersion(input.host, `Host "${input.host.name}"`, meta);
+  const compared: Array<{ name: string; manifest: FederationManifest }> = [];
   for (const remote of input.remotes) {
     if (remote.missing || !remote.manifest) {
       continue;
     }
-    checkManifestVersion(remote.manifest, `Remote "${remote.name}"`, findings);
-    checkSharedDeps(input.host, remote.name, remote.manifest, findings);
-    checkNativeModules(input.host, remote.name, remote.manifest, findings);
+    compared.push({ name: remote.name, manifest: remote.manifest });
+    checkManifestVersion(remote.manifest, `Remote "${remote.name}"`, meta);
+    checkSharedDeps(
+      input.host,
+      `host "${input.host.name}"`,
+      remote.manifest,
+      `remote "${remote.name}"`,
+      shared,
+      'host-remote'
+    );
+    // Native checks stay host↔remote only: native is directional and the
+    // host is the provider, so remote↔remote pairs have nothing to compare.
+    checkNativeModules(input.host, remote.name, remote.manifest, native);
   }
-  checkRemoteManifests(input, findings);
 
-  return { findings };
+  if (input.pairwise) {
+    // Opt-in, shared-only, every (remote_i, remote_j) with i < j — opt-in
+    // keeps the O(n²) noise off anyone's default report.
+    for (let i = 0; i < compared.length; i++) {
+      for (let j = i + 1; j < compared.length; j++) {
+        const left = compared[i]!;
+        const right = compared[j]!;
+        checkSharedDeps(
+          left.manifest,
+          `remote "${left.name}"`,
+          right.manifest,
+          `remote "${right.name}"`,
+          shared,
+          'remote-remote'
+        );
+      }
+    }
+  }
+
+  checkRemoteManifests(input, meta);
+
+  return { findings: [...native, ...shared, ...meta] };
 }
 
 /**

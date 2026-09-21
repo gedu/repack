@@ -263,6 +263,245 @@ describe('doctor report rendering', () => {
   });
 });
 
+describe('doctor extensions', () => {
+  describe('frozen host↔remote message text', () => {
+    it('keeps host↔remote shared-dep messages byte-identical', () => {
+      const report = runDoctor({
+        host,
+        remotes: [{ name: 'store', manifest: remoteConflicting }],
+      });
+      const messageFor = (code: string) =>
+        report.findings.find((finding) => finding.code === code)!.message;
+
+      expect(messageFor('SINGLETON_MISMATCH')).toBe(
+        'Shared dependency "zustand" is singleton: true on host "shell" but false on remote "store".'
+      );
+      expect(messageFor('SHARED_VERSION_DRIFT')).toBe(
+        'Singleton shared dependency "react" resolves to different versions: host "shell" has 19.0.0, remote "store" has 19.1.0. Align the versions (or remove singleton).'
+      );
+      expect(messageFor('SHARED_RANGE_UNRESOLVABLE')).toBe(
+        'Shared dependency "react-native" declares ranges that cannot intersect: host "shell" requires ~0.79.2, remote "store" requires ~0.74.5.'
+      );
+      expect(messageFor('EAGER_ADVISORY')).toBe(
+        'Shared dependency "react-native" is eager: true on host "shell" but eager: false on remote "store" — expected host-eager/remote-lazy convention; reported as advisory.'
+      );
+    });
+  });
+
+  describe('--pairwise remote↔remote comparisons', () => {
+    // Both remotes match the host everywhere; they only drift from EACH
+    // OTHER on `extra-lib`, which the host does not share at all.
+    function driftingPair(): [FederationManifest, FederationManifest] {
+      const one = clone(remoteClean);
+      const two = clone(remoteClean);
+      one.shared.push({
+        name: 'extra-lib',
+        version: '1.0.0',
+        singleton: true,
+        eager: true,
+        requiredVersion: '^1.0.0',
+      });
+      two.shared.push({
+        name: 'extra-lib',
+        version: '2.0.0',
+        singleton: true,
+        eager: true,
+        requiredVersion: '^2.0.0',
+      });
+      return [one, two];
+    }
+
+    it('does not compare remotes with each other by default', () => {
+      const [one, two] = driftingPair();
+      const report = runDoctor({
+        host,
+        remotes: [
+          { name: 'one', manifest: one },
+          { name: 'two', manifest: two },
+        ],
+      });
+
+      expect(report.findings).toEqual([]);
+    });
+
+    it('finds remote↔remote shared drift, naming both remotes, when enabled', () => {
+      const [one, two] = driftingPair();
+      const report = runDoctor({
+        host,
+        remotes: [
+          { name: 'one', manifest: one },
+          { name: 'two', manifest: two },
+        ],
+        pairwise: true,
+      });
+
+      const drift = report.findings.find(
+        (finding) => finding.code === 'SHARED_VERSION_DRIFT'
+      );
+      expect(drift?.severity).toBe('error');
+      expect(drift?.message).toContain('remote "one" has 1.0.0');
+      expect(drift?.message).toContain('remote "two" has 2.0.0');
+      expect(doctorExitCode(report)).toBe(1);
+    });
+
+    it('treats any remote↔remote eager mismatch as an advisory in both directions', () => {
+      const build = () => {
+        const one = clone(remoteClean);
+        const two = clone(remoteClean);
+        one.shared[0]!.eager = true;
+        two.shared[0]!.eager = false;
+        return [one, two] as [FederationManifest, FederationManifest];
+      };
+
+      for (const swap of [false, true]) {
+        const [a, b] = build();
+        const report = runDoctor({
+          host,
+          remotes: swap
+            ? [
+                { name: 'two', manifest: b },
+                { name: 'one', manifest: a },
+              ]
+            : [
+                { name: 'one', manifest: a },
+                { name: 'two', manifest: b },
+              ],
+          pairwise: true,
+        });
+
+        expect(codes(report)).not.toContain('EAGER_MISMATCH');
+        const pairAdvisories = report.findings.filter((finding) =>
+          finding.message.includes('no convention orders two remotes')
+        );
+        expect(pairAdvisories).toHaveLength(1);
+        expect(pairAdvisories[0]!.severity).toBe('warning');
+        expect(pairAdvisories[0]!.message).toContain('remote "one"');
+        expect(pairAdvisories[0]!.message).toContain('remote "two"');
+        // The pair advisory alone never fails the run.
+        expect(doctorExitCode(report)).toBe(0);
+      }
+    });
+
+    it('emits no native findings for remote↔remote pairs', () => {
+      const conflicting = clone(remoteConflicting);
+      const clean = clone(remoteClean);
+      const report = runDoctor({
+        host,
+        remotes: [
+          { name: 'one', manifest: conflicting },
+          { name: 'two', manifest: clean },
+        ],
+        pairwise: true,
+      });
+
+      const native = report.findings.filter(
+        (finding) =>
+          finding.code === 'MISSING_NATIVE_MODULE' ||
+          finding.code === 'HEURISTIC_ADVISORY'
+      );
+      // Exactly the host↔remote finding for "one"; no remote↔remote native
+      // findings can name "two" without the host (the host is the provider).
+      expect(native).toHaveLength(1);
+      expect(native[0]!.message).toContain('remote "one"');
+      expect(native[0]!.message).toContain('host "shell"');
+      expect(native[0]!.message).not.toContain('remote "two"');
+    });
+  });
+
+  describe('host-native-first ordering without fail-fast', () => {
+    function orderingRemotes(): [
+      { name: string; manifest: FederationManifest },
+      { name: string; manifest: FederationManifest },
+    ] {
+      // Drift-heavy but native-clean remote, listed FIRST: before bucketing
+      // its shared findings led the report.
+      const drifty = clone(remoteConflicting);
+      drifty.reactNative.nativeModules =
+        drifty.reactNative.nativeModules.filter(
+          (entry) => entry.package === 'react-native-reanimated'
+        );
+      // Native-offending but shared-clean remote, listed SECOND.
+      const nativy = clone(remoteClean);
+      nativy.reactNative.nativeModules.push({
+        package: 'react-native-maps',
+        version: '1.20.1',
+        modules: undefined,
+        turboModule: false,
+        confidence: 'static',
+      } as (typeof nativy.reactNative.nativeModules)[number]);
+      return [
+        { name: 'drifty', manifest: drifty },
+        { name: 'nativy', manifest: nativy },
+      ];
+    }
+
+    it('lists native findings before shared findings and covers every remote', () => {
+      const report = runDoctor({ host, remotes: orderingRemotes() });
+      const codes = report.findings.map((finding) => finding.code);
+
+      expect(codes).toContain('MISSING_NATIVE_MODULE');
+      expect(codes).toContain('SHARED_VERSION_DRIFT');
+      expect(codes.indexOf('MISSING_NATIVE_MODULE')).toBeLessThan(
+        codes.indexOf('SHARED_VERSION_DRIFT')
+      );
+      // No fail-fast: the second remote's finding is present even though the
+      // first remote already produced errors.
+      expect(
+        report.findings
+          .filter((finding) => finding.code === 'SHARED_VERSION_DRIFT')
+          .map((finding) => finding.message)
+          .join()
+      ).toContain('drifty');
+      expect(
+        report.findings
+          .filter((finding) => finding.code === 'MISSING_NATIVE_MODULE')
+          .map((finding) => finding.message)
+          .join()
+      ).toContain('nativy');
+      expect(doctorExitCode(report)).toBe(1);
+    });
+
+    it('emits manifest-meta findings last, after every comparison ran', () => {
+      const newerHost = clone(host);
+      newerHost.manifestVersion = 2 as 1;
+      const report = runDoctor({
+        host: newerHost,
+        remotes: [
+          { name: 'store', manifest: remoteConflicting },
+          { name: 'payments', missing: true },
+        ],
+      });
+      const codes = report.findings.map((finding) => finding.code);
+
+      const metaIndexes = [
+        codes.indexOf('MANIFEST_VERSION_AHEAD'),
+        codes.indexOf('MISSING_REMOTE_MANIFEST'),
+      ];
+      const realIndexes = [
+        codes.indexOf('SHARED_VERSION_DRIFT'),
+        codes.indexOf('MISSING_NATIVE_MODULE'),
+      ];
+      expect(codes).toContain('MANIFEST_VERSION_AHEAD');
+      expect(codes).toContain('MISSING_REMOTE_MANIFEST');
+      // Meta findings are emitted as a bucket after native and shared ones.
+      expect(Math.min(...metaIndexes)).toBeGreaterThan(
+        Math.max(...realIndexes)
+      );
+    });
+
+    it('keeps the JSON array in report order', () => {
+      const report = runDoctor({ host, remotes: orderingRemotes() });
+      const parsed = JSON.parse(doctorReportToJson(report)) as {
+        findings: Array<{ code: string }>;
+      };
+
+      expect(parsed.findings.map((finding) => finding.code)).toEqual(
+        report.findings.map((finding) => finding.code)
+      );
+    });
+  });
+});
+
 describe('rangesIntersect', () => {
   it.each([
     // caret

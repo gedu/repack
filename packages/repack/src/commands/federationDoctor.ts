@@ -133,6 +133,7 @@ export async function federationDoctor(
     host: host.manifest,
     remotes,
     allowMissingManifests: args.allowMissingManifests,
+    pairwise: args.pairwise,
   });
 
   if (args.format === 'json') {

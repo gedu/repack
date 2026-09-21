@@ -53,6 +53,8 @@ export interface FederationDoctorArguments {
   remotes?: string | string[];
   format?: string;
   allowMissingManifests?: boolean;
+  /** Also compare every remote pair, shared-dependency checks only. */
+  pairwise?: boolean;
 }
 
 export interface CliConfig {

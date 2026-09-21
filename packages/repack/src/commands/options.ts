@@ -128,6 +128,11 @@ export const federationDoctorCommandOptions = [
     description:
       'Report remotes without a manifest as warnings instead of errors',
   },
+  {
+    name: '--pairwise',
+    description:
+      'Additionally compare every remote pair for shared-dependency drift (shared checks only; native checks stay host-to-remote)',
+  },
 ];
 
 export const bundleCommandOptions = [
