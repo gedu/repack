@@ -94,6 +94,11 @@ export const startCommandOptions = [
       'Bundler engine to use: "rspack" or "webpack". If not specified, auto-detected from config filename.',
     parse: parseBundler,
   },
+  {
+    name: '--standalone',
+    description:
+      'Run this app in standalone mode: all shared dependencies become eager and no remote is consumed. Runtime-only — it is never persisted to any file',
+  },
 ];
 
 export const federationManifestCommandOptions = [
@@ -239,5 +244,10 @@ export const bundleCommandOptions = [
     description:
       'Bundler engine to use: "rspack" or "webpack". If not specified, auto-detected from config filename.',
     parse: parseBundler,
+  },
+  {
+    name: '--standalone',
+    description:
+      'Build this app in standalone mode: all shared dependencies become eager and no remote is consumed. Runtime-only — it is never persisted to any file',
   },
 ];

@@ -18,3 +18,17 @@ describe.each([
     );
   });
 });
+
+describe('--standalone registration', () => {
+  test.each([
+    ['start', startCommandOptions],
+    ['bundle', bundleCommandOptions],
+  ])('%s command exposes --standalone as a boolean flag', (_, options) => {
+    const standaloneOption = options.find(
+      (option) => option.name === '--standalone'
+    );
+    // Boolean commander flag: no parse, no default — presence means true.
+    expect(standaloneOption).toBeDefined();
+    expect(standaloneOption?.parse).toBeUndefined();
+  });
+});

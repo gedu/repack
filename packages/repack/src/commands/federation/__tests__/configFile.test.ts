@@ -1,7 +1,9 @@
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
+import { CLIError } from '../../../helpers/index.js';
 import {
+  assertStandaloneSupported,
   ConfigFileInvalidError,
   describeJsonParseFailure,
   FEDERATION_CONFIG_FILENAME,
@@ -324,5 +326,65 @@ describe('resolveFederationWorkspace', () => {
     expect(withPort.host!.source.endsWith('host.json')).toBe(
       withoutPort.host!.source.endsWith('host.json')
     );
+  });
+});
+
+describe('assertStandaloneSupported', () => {
+  const STANDALONE_DIR = path.join(FIXTURES, 'config-standalone');
+  const appRoot = (name: string) => path.join(STANDALONE_DIR, 'apps', name);
+
+  it('proceeds for an entry that declares standalone: true', () => {
+    expect(() => assertStandaloneSupported(appRoot('supported'))).not.toThrow();
+  });
+
+  it('refuses an entry with no standalone declaration, naming remote + file + fix', () => {
+    expect(() => assertStandaloneSupported(appRoot('undeclared'))).toThrow(
+      '--standalone refused: remote "undeclared" does not declare ' +
+        'standalone support. Set "standalone": true for it in ' +
+        path.join(STANDALONE_DIR, FEDERATION_CONFIG_FILENAME) +
+        '.'
+    );
+  });
+
+  it('treats standalone: false as unsupported', () => {
+    expect(() => assertStandaloneSupported(appRoot('declined'))).toThrow(
+      'remote "declined" does not declare standalone support'
+    );
+  });
+
+  it('defaults an entry with no root to the config directory itself', () => {
+    expect(() =>
+      assertStandaloneSupported(
+        path.join(FIXTURES, 'config-standalone-default')
+      )
+    ).toThrow('remote "default-root" does not declare standalone support');
+  });
+
+  it('proceeds when the root matches no remote entry (e.g. the host)', () => {
+    // The host runs standalone without any declaration; host.root "." equals
+    // the config dir here, and no REMOTE entry matches it in config-valid.
+    expect(() => assertStandaloneSupported(VALID_DIR)).not.toThrow();
+  });
+
+  it('proceeds with no config file at all (no declaration needed to work)', () => {
+    const isolated = path.join(tmpDir, 'standalone-nocfg');
+    fs.mkdirSync(isolated, { recursive: true });
+    expect(() => assertStandaloneSupported(isolated)).not.toThrow();
+  });
+
+  it('refuses with a clear CLIError when the config file is malformed', () => {
+    let caught: unknown;
+    try {
+      assertStandaloneSupported(malformedDir);
+    } catch (error) {
+      caught = error;
+    }
+    expect(caught).toBeInstanceOf(CLIError);
+    const message = (caught as Error).message;
+    expect(message).toContain('--standalone refused');
+    expect(message).toContain(
+      path.join(malformedDir, FEDERATION_CONFIG_FILENAME)
+    );
+    expect(message).not.toMatch(/\n\s+at\s/);
   });
 });

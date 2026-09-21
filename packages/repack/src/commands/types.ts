@@ -20,6 +20,8 @@ export interface BundleArguments {
   config?: string;
   webpackConfig?: string;
   bundler?: Bundler;
+  /** Runtime-only standalone mode; reaches configs via `env.argv`. */
+  standalone?: boolean;
 }
 
 export interface StartArguments {
@@ -40,6 +42,8 @@ export interface StartArguments {
   config?: string;
   webpackConfig?: string;
   bundler?: Bundler;
+  /** Runtime-only standalone mode; reaches configs via `env.argv`. */
+  standalone?: boolean;
 }
 
 export interface FederationManifestArguments {

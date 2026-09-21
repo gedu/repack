@@ -1,5 +1,6 @@
 import fs from 'node:fs';
 import path from 'node:path';
+import { CLIError } from '../../helpers/index.js';
 
 /** Name of the federation workspace config file tools discover and load. */
 export const FEDERATION_CONFIG_FILENAME = 'repack-federation.json';
@@ -345,4 +346,44 @@ export function resolveFederationWorkspace(
   }
 
   return workspace;
+}
+
+/**
+ * Tooling-side gate for `--standalone`: refuse only when a
+ * `repack-federation.json` exists AND declares the app's entry as not
+ * supporting standalone. No config file, or a root matching no remote
+ * entry, proceeds unopposed — standalone needs no declaration to *work*,
+ * only support-refusal needs the file. Bundler-runtime code never calls
+ * this and never reads the workspace map.
+ */
+export function assertStandaloneSupported(rootDir: string): void {
+  const target = path.resolve(rootDir);
+  let loaded: ReturnType<typeof loadFederationConfig>;
+  try {
+    loaded = loadFederationConfig({ cwd: target });
+  } catch (error) {
+    if (error instanceof ConfigFileInvalidError) {
+      // Refusal runs before any compile: a CLIError keeps the message
+      // clear, the exit non-zero and the stack hidden (repo pattern).
+      throw new CLIError(
+        `--standalone refused: workspace config ${error.filePath}: ` +
+          `${error.reasons.join('; ')} — fix it before requesting standalone mode.`
+      );
+    }
+    throw error;
+  }
+  if (!loaded) return;
+
+  const configDir = path.dirname(loaded.filePath);
+  for (const [name, entry] of Object.entries(loaded.config.remotes)) {
+    const entryRoot = path.resolve(configDir, entry.root ?? '.');
+    if (entryRoot !== target) continue;
+    if (entry.standalone !== true) {
+      throw new CLIError(
+        `--standalone refused: remote "${name}" does not declare standalone support. ` +
+          `Set "standalone": true for it in ${loaded.filePath}.`
+      );
+    }
+    return;
+  }
 }
