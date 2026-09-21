@@ -1,5 +1,9 @@
 import path from 'node:path';
 import {
+  ConfigFileInvalidError,
+  resolveFederationWorkspace,
+} from './federation/configFile.js';
+import {
   type DoctorRemoteInput,
   doctorExitCode,
   doctorReportToJson,
@@ -13,18 +17,6 @@ import {
   ManifestNotFoundError,
 } from './federation/loadManifest.js';
 import type { CliConfig, FederationDoctorArguments } from './types.js';
-
-/** Split `--remotes` into sources, tolerating a merged array from the CLI. */
-function parseRemoteList(remotes: string | string[] | undefined): string[] {
-  if (!remotes) return [];
-  const values = Array.isArray(remotes) ? remotes : [remotes];
-  return values.flatMap((value) =>
-    value
-      .split(',')
-      .map((source) => source.trim())
-      .filter(Boolean)
-  );
-}
 
 /** Best-effort label for a remote whose manifest could not be loaded. */
 function labelFromSource(source: string): string {
@@ -50,7 +42,26 @@ export async function federationDoctor(
   _cliConfig: CliConfig,
   args: FederationDoctorArguments
 ) {
-  if (!args.host) {
+  // Values come from flags first, then a discovered repack-federation.json,
+  // then defaults; a malformed config file is exit 2 with a plain message.
+  let workspace: ReturnType<typeof resolveFederationWorkspace>;
+  try {
+    workspace = resolveFederationWorkspace(process.cwd(), {
+      host: args.host,
+      remotes: args.remotes,
+    });
+  } catch (error) {
+    if (error instanceof ConfigFileInvalidError) {
+      console.error(
+        `Federation config — ${error.filePath}: ${error.reasons.join('; ')}`
+      );
+      process.exit(2);
+      return;
+    }
+    throw error;
+  }
+
+  if (!workspace.host) {
     console.error(
       "Option '--host <source>' is required: pass the host manifest as a " +
         '.json file, a build output directory, or an http(s) URL.'
@@ -59,8 +70,7 @@ export async function federationDoctor(
     return;
   }
 
-  const remoteSources = parseRemoteList(args.remotes);
-  if (remoteSources.length === 0) {
+  if (workspace.remotes.length === 0) {
     console.error(
       "Option '--remotes <list>' is required: pass a comma-separated list " +
         'of remote manifest sources.'
@@ -71,7 +81,7 @@ export async function federationDoctor(
 
   let host: LoadedManifest;
   try {
-    host = await loadManifest(args.host);
+    host = await loadManifest(workspace.host.source);
   } catch (error) {
     if (
       error instanceof ManifestNotFoundError ||
@@ -85,17 +95,26 @@ export async function federationDoctor(
   }
 
   const remotes: DoctorRemoteInput[] = [];
-  for (const source of remoteSources) {
+  for (const remoteEntry of workspace.remotes) {
+    const { source } = remoteEntry;
     try {
       const remote = await loadManifest(source);
       remotes.push({
+        // Config-file remotes carry their declared name, which labels
+        // findings better than any source-derived guess.
         name:
-          remote.manifest.name || remote.manifest.id || labelFromSource(source),
+          remoteEntry.name ??
+          remote.manifest.name ??
+          remote.manifest.id ??
+          labelFromSource(source),
         manifest: remote.manifest,
       });
     } catch (error) {
       if (error instanceof ManifestNotFoundError) {
-        remotes.push({ name: labelFromSource(source), missing: true });
+        remotes.push({
+          name: remoteEntry.name ?? labelFromSource(source),
+          missing: true,
+        });
         continue;
       }
       if (error instanceof ManifestInvalidError) {

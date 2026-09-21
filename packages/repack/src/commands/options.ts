@@ -112,12 +112,12 @@ export const federationDoctorCommandOptions = [
   {
     name: '--host <source>',
     description:
-      'Host manifest source: a .json file, a build output directory containing repack-federation-manifest.json, or an http(s) URL',
+      'Host manifest source: a .json file, a build output directory containing repack-federation-manifest.json, or an http(s) URL. Optional when repack-federation.json provides it',
   },
   {
     name: '--remotes <list>',
     description:
-      'Comma-separated list of remote manifest sources (same shapes as --host)',
+      'Comma-separated list of remote manifest sources (same shapes as --host). Optional when repack-federation.json provides them',
   },
   {
     name: '--format <format>',

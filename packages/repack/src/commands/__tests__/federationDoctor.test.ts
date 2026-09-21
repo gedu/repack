@@ -161,3 +161,103 @@ describe('federation-doctor command', () => {
     expect(exit).toHaveBeenLastCalledWith(2);
   });
 });
+
+describe('federation-doctor with repack-federation.json', () => {
+  const configFixture = (name: string) => path.join(FIXTURES, name);
+  let cwdSpy: jest.SpyInstance;
+
+  function fromDir(dir: string) {
+    cwdSpy = jest.spyOn(process, 'cwd').mockReturnValue(dir);
+  }
+
+  afterEach(() => {
+    cwdSpy?.mockRestore();
+  });
+
+  it('runs zero-flag using the file host and remotes', async () => {
+    fromDir(configFixture('config-valid'));
+    await federationDoctor([], cliConfig, {});
+
+    expect(stdout()).toContain('no issues found');
+    expect(exit).toHaveBeenCalledWith(0);
+  });
+
+  it('labels file-derived remotes with their declared names', async () => {
+    fromDir(configFixture('config-drift'));
+    await federationDoctor([], cliConfig, {});
+
+    expect(stdout()).toContain('SHARED_VERSION_DRIFT');
+    expect(stdout()).toContain('remote "catalog"');
+    expect(exit).toHaveBeenCalledWith(1);
+  });
+
+  it('exits 2 on a malformed file naming its path, never a stack', async () => {
+    // Invalid JSON is written at runtime: a committed broken .json would
+    // break the repo-wide biome check.
+    const malformedDir = path.join(tmpDir, 'config-malformed');
+    fs.mkdirSync(malformedDir, { recursive: true });
+    fs.writeFileSync(
+      path.join(malformedDir, 'repack-federation.json'),
+      '{ "host": { "manifest":\n'
+    );
+    fromDir(malformedDir);
+    await federationDoctor([], cliConfig, {});
+
+    const printed = error.mock.calls.map(([line]) => String(line)).join('\n');
+    expect(printed).toContain('Federation config');
+    expect(printed).toContain(
+      path.join(malformedDir, 'repack-federation.json')
+    );
+    expect(printed).toContain('is not valid JSON');
+    expect(printed).not.toMatch(/\n\s+at\s+\S/);
+    // Malformed input must never fall through to defaults or a report.
+    expect(log).not.toHaveBeenCalled();
+    expect(exit).toHaveBeenCalledWith(2);
+  });
+
+  it('exits 2 naming the failing field path for a schema violation', async () => {
+    fromDir(configFixture('config-invalid'));
+    await federationDoctor([], cliConfig, {});
+
+    expect(error).toHaveBeenCalledWith(
+      expect.stringContaining('host.manifest is required (string)')
+    );
+    expect(exit).toHaveBeenCalledWith(2);
+  });
+
+  it('lets --host override the file host while remotes still come from the file', async () => {
+    // The file host is clean against the file remote (exit 0 baseline);
+    // a flag host that drifts from that remote proves per-value precedence.
+    fromDir(configFixture('config-valid'));
+    await federationDoctor([], cliConfig, { host: DRIFT_REMOTE });
+
+    expect(stdout()).toContain('SHARED_VERSION_DRIFT');
+    expect(stdout()).toContain('remote "store"');
+    expect(exit).toHaveBeenCalledWith(1);
+  });
+
+  it('exits 2 with the required-option message when neither source applies', async () => {
+    const isolated = fs.mkdtempSync(path.join(os.tmpdir(), 'repack-nocfg-'));
+    fromDir(isolated);
+    await federationDoctor([], cliConfig, {});
+
+    expect(error).toHaveBeenCalledWith(expect.stringContaining('--host'));
+    expect(exit).toHaveBeenCalledWith(2);
+    fs.rmSync(isolated, { recursive: true, force: true });
+  });
+
+  it('behaves identically with and without declared ports', async () => {
+    fromDir(configFixture('config-valid'));
+    await federationDoctor([], cliConfig, {});
+    const withPort = { out: stdout(), code: exit.mock.calls[0]?.[0] };
+    exit.mockClear();
+    log.mockClear();
+    cwdSpy.mockRestore();
+
+    fromDir(configFixture('config-noport'));
+    await federationDoctor([], cliConfig, {});
+
+    expect(stdout()).toBe(withPort.out);
+    expect(exit).toHaveBeenCalledWith(withPort.code);
+  });
+});
