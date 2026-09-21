@@ -100,10 +100,13 @@ function checkSharedDeps(
       });
     }
     if (hostEntry.eager !== remoteEntry.eager) {
+      const conventional = hostEntry.eager && !remoteEntry.eager; // host-eager / remote-lazy = MF convention
       findings.push({
-        severity: 'error',
-        code: 'EAGER_MISMATCH',
-        message: `Shared dependency "${name}" is eager: ${hostEntry.eager} on host "${host.name}" but ${remoteEntry.eager} on remote "${remoteName}".`,
+        severity: conventional ? 'warning' : 'error',
+        code: conventional ? 'EAGER_ADVISORY' : 'EAGER_MISMATCH',
+        message: conventional
+          ? `Shared dependency "${name}" is eager: true on host "${host.name}" but eager: false on remote "${remoteName}" — expected host-eager/remote-lazy convention; reported as advisory.`
+          : `Shared dependency "${name}" is eager: ${hostEntry.eager} on host "${host.name}" but ${remoteEntry.eager} on remote "${remoteName}".`,
       });
     }
 

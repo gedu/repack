@@ -64,16 +64,62 @@ describe('runDoctor', () => {
     expect(finding.message).toContain('~0.74.5');
   });
 
-  it('flags singleton and eager mismatches naming both values', () => {
+  it('flags a singleton mismatch as error and the conventional eager mismatch as an advisory', () => {
     const singleton = findingFor('SINGLETON_MISMATCH');
     expect(singleton.severity).toBe('error');
     expect(singleton.message).toContain('true');
     expect(singleton.message).toContain('false');
 
-    const eager = findingFor('EAGER_MISMATCH');
-    expect(eager.severity).toBe('error');
+    // The conflicting fixture puts react-native eager: true on the host and
+    // eager: false on the remote — the expected host-eager/remote-lazy
+    // convention — so it is an advisory, not an error.
+    const eager = findingFor('EAGER_ADVISORY');
+    expect(eager.severity).toBe('warning');
     expect(eager.message).toContain('true');
     expect(eager.message).toContain('false');
+    expect(eager.message).toContain('host-eager/remote-lazy convention');
+
+    const report = runDoctor({
+      host,
+      remotes: [{ name: 'store', manifest: remoteConflicting }],
+    });
+    expect(codes(report)).not.toContain('EAGER_MISMATCH');
+  });
+
+  it('errors on a reverse eager mismatch keeping the legacy message byte-identical', () => {
+    const lazyHost = clone(host);
+    const eagerRemote = clone(remoteConflicting);
+    // react-native: host eager: false against remote eager: true — no
+    // convention orders this; it stays the legacy EAGER_MISMATCH error.
+    lazyHost.shared[1]!.eager = false;
+    eagerRemote.shared[1]!.eager = true;
+
+    const report = runDoctor({
+      host: lazyHost,
+      remotes: [{ name: 'store', manifest: eagerRemote }],
+    });
+
+    const eager = report.findings.find(
+      (finding) => finding.code === 'EAGER_MISMATCH'
+    );
+    expect(eager?.severity).toBe('error');
+    expect(eager?.message).toBe(
+      'Shared dependency "react-native" is eager: false on host "shell" but true on remote "store".'
+    );
+    expect(codes(report)).not.toContain('EAGER_ADVISORY');
+  });
+
+  it('exits 0 when the conventional eager advisory is the only finding', () => {
+    const lazyRemote = clone(remoteClean);
+    lazyRemote.shared[0]!.eager = false;
+
+    const report = runDoctor({
+      host,
+      remotes: [{ name: 'store', manifest: lazyRemote }],
+    });
+
+    expect(codes(report)).toEqual(['EAGER_ADVISORY']);
+    expect(doctorExitCode(report)).toBe(0);
   });
 
   it('errors when a remote native module is absent from a trusted host list', () => {
