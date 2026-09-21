@@ -380,7 +380,9 @@ describe('ModuleFederationPlugin', () => {
     const sharedNames = manifest.shared.map(
       (entry: { name: string }) => entry.name
     );
-    expect(sharedNames).toEqual(expect.arrayContaining(['react', 'react-native']));
+    expect(sharedNames).toEqual(
+      expect.arrayContaining(['react', 'react-native'])
+    );
     // Synthetic deep-import prefixes injected by the plugin must not leak
     // into the manifest as fake shared dependencies
     expect(sharedNames).not.toContain('react-native/');
