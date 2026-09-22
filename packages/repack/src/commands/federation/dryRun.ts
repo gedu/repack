@@ -140,7 +140,13 @@ export async function collectDryRunInput(
     declaredName?: string
   ): Promise<DryRunApp> => {
     const root = entry.root ?? baseDir;
-    const extracted = await extractAppShared(root);
+    // A declared per-app `config` always wins over name-based discovery —
+    // the twin-app shared-root layout is only attributable through it.
+    // Absent field ⇒ today's discovery, untouched.
+    const extracted = await extractAppShared(
+      root,
+      entry.config ? { configPath: entry.config } : {}
+    );
     return {
       name: declaredName ?? extracted.name,
       root,

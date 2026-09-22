@@ -1,6 +1,26 @@
+import path from 'node:path';
 import type { FederationManifestSharedEntry } from '../../../plugins/federationManifest/types.js';
+import { resolveFederationWorkspace } from '../configFile.js';
 import { doctorExitCode } from '../doctor.js';
-import { type DryRunApp, runDryRun, UNBUILT_CAVEAT } from '../dryRun.js';
+import {
+  collectDryRunInput,
+  type DryRunApp,
+  runDryRun,
+  UNBUILT_CAVEAT,
+} from '../dryRun.js';
+import { extractAppShared } from '../extractShared.js';
+
+// collectDryRunInput evaluates real user configs in-process; these tests
+// pin WHICH config each app is routed to, so the extractor is a spy over an
+// inert result (requireActual keeps ConfigEvalError for the import).
+jest.mock('../extractShared.js', () => ({
+  ...jest.requireActual('../extractShared.js'),
+  extractAppShared: jest.fn(async (_root: string) => ({
+    name: 'stub',
+    pluginName: 'Stub',
+    shared: [],
+  })),
+}));
 
 const sharedEntry = (
   name: string,
@@ -153,5 +173,50 @@ describe('runDryRun', () => {
     expect(report.findings.map((finding) => finding.code)).not.toContain(
       'MISSING_REMOTE_MANIFEST'
     );
+  });
+});
+
+describe('collectDryRunInput config pass-through', () => {
+  const extractMock = jest.mocked(extractAppShared);
+  const FIXTURES = path.join(__dirname, '__fixtures__');
+
+  it('routes each declared config as configPath into extractAppShared', async () => {
+    // Delta spec "Twin-app shared-root layout attributes correctly" at the
+    // routing level: both twins share root "." and their config NAMES match
+    // no discovery rule — only the declared config fields can attribute
+    // them, so each app must reach the extractor with its own configPath.
+    const twinDir = path.join(FIXTURES, 'config-dev-twin');
+    const workspace = resolveFederationWorkspace(twinDir, {});
+
+    await collectDryRunInput(twinDir, workspace);
+
+    expect(extractMock).toHaveBeenCalledWith(twinDir, {
+      configPath: path.join(twinDir, 'config.host-app.mts'),
+    });
+    expect(extractMock).toHaveBeenCalledWith(twinDir, {
+      configPath: path.join(twinDir, 'config.mini-app.mts'),
+    });
+    expect(extractMock).toHaveBeenCalledTimes(2);
+  });
+
+  it('calls without configPath when no config fields are declared', async () => {
+    // Delta spec "Pass-through is additive only": apps without `config`
+    // keep today's call shape — discovery stays exactly as shipped.
+    const workspaceDir = path.join(
+      __dirname,
+      '..',
+      '__fixtures__',
+      'dry-run-workspace',
+      'clean'
+    );
+    const workspace = resolveFederationWorkspace(workspaceDir, {});
+
+    await collectDryRunInput(workspaceDir, workspace);
+
+    expect(extractMock).toHaveBeenCalledTimes(2);
+    for (const call of extractMock.mock.calls) {
+      // Today's call shape carries no configPath value at all.
+      expect(call[1] ?? {}).not.toHaveProperty('configPath');
+    }
   });
 });
