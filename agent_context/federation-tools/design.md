@@ -305,6 +305,39 @@ Deltas from the design above, all deliberate:
   `config.<app>.mts` pair in one directory, still need `--config`-style
   flows from the PR 5 runner).
 
+## PR 5 implementation notes (as built)
+
+- **Status surface is a terminal block, not a web dashboard (D10 deviation).**
+  The design explored a browser status page; what shipped is a runner-owned
+  fixed-height status block (`runnerConsole.ts`) redrawn only with
+  cursor-up + erase-line sequences, coalesced to ~60 ms and only on content
+  change. Rationale: zero new serving surface, the append-only prefixed log
+  pane stays greppable, and CI (non-TTY) degrades to plain tables for free.
+  `--json` carries the same state machine for machines.
+- **Spawn shape resolved**: `react-native start --bundler <bundler>
+  [--config …] --port <p> --no-interactive [--platform p] [--standalone]
+  --no-reverse-port`. The `<bundler>-start` commands named in early drafts
+  do not exist post-#1424; `start --bundler` is the supported path. The
+  spec's "Plan resolution" wording was corrected to match at apply time.
+  Children spawn as `process.execPath <resolved local cli.js> …` — PATH is
+  never consulted (threat row "Subprocess spawn").
+- **exit-hook NOT used despite the design naming it**: `exit-hook@4` is
+  ESM-only and repack ships CJS — `require` would crash. Terminal restore
+  rides `process.on('exit')` (fires for `process.exit()` too) + `finally`
+  + idempotent `release()`. Same guarantee, no ESM interop risk.
+- **Wizard fallback reads with a queueing line reader**:
+  `readline/promises.question()` drops lines arriving while no question is
+  pending (batch/piped input resolves only the first question) and never
+  rejects on EOF — both hang a sequential prompt chain.
+  `wizard.ts createLineReader` buffers `line` events and maps EOF to
+  cancel. Verified empirically before adopting.
+- `--dry-run` runs conflict probes read-only but allocates nothing;
+  unmanaged ports display `auto` / JSON `null` (D4). Live ports are
+  always numbers by spawn time.
+- Drive-by shipped in `packages/dev-server`: `normalizeOptions` built
+  `url` from the raw `options.port`, leaking `undefined` into every URL
+  (and proxy targets) when `port` was omitted. Own commit, reverts alone.
+
 ## Referenced surface (verified 2026-09)
 
 - `packages/repack/src/plugins/ModuleFederationPluginV1.ts` / `V2.ts` — no
