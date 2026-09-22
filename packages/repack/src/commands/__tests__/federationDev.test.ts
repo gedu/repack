@@ -170,6 +170,62 @@ describe('federation-dev usage errors (exit 2, spawn nothing)', () => {
   });
 });
 
+describe('federation-dev --config <path>', () => {
+  it('loads the specific file and anchors the plan on its directory', async () => {
+    // cwd sits on the twin fixture on purpose: --config must beat the
+    // walk-up default, and every plan path anchors on the FILE's dir.
+    const configPath = path.join(tmpDir, 'custom-federation.json');
+    fs.writeFileSync(
+      configPath,
+      JSON.stringify({
+        host: { manifest: './build/host', root: '.', port: 8123 },
+        remotes: {},
+      })
+    );
+    await federationDev([], cliConfig, {
+      config: configPath,
+      dryRun: true,
+      json: true,
+      interactive: false,
+    });
+    expect(exitSpy).toHaveBeenCalledWith(0);
+    const plan = stdoutDocs()[0];
+    expect(plan.apps).toHaveLength(1);
+    expect(plan.apps[0].port).toBe(8123);
+    expect(plan.apps[0].root).toBe(tmpDir);
+    expect(execaMock).not.toHaveBeenCalled();
+  });
+
+  it('a missing --config file exits 2 naming the resolved path', async () => {
+    const missing = path.join(tmpDir, 'nope-federation.json');
+    await federationDev([], cliConfig, {
+      config: missing,
+      dryRun: true,
+      interactive: false,
+    });
+    expect(exitSpy).toHaveBeenCalledWith(2);
+    expect(output()).toContain(missing);
+    expect(execaMock).not.toHaveBeenCalled();
+  });
+
+  it('an invalid --config file exits 2 through the config-error path', async () => {
+    const badPath = path.join(tmpDir, 'bad-federation.json');
+    fs.writeFileSync(
+      badPath,
+      JSON.stringify({ host: { root: '.' }, remotes: {} })
+    );
+    await federationDev([], cliConfig, {
+      config: badPath,
+      dryRun: true,
+      interactive: false,
+    });
+    expect(exitSpy).toHaveBeenCalledWith(2);
+    expect(output()).toContain(badPath);
+    expect(output()).toContain('host.manifest');
+    expect(execaMock).not.toHaveBeenCalled();
+  });
+});
+
 describe('federation-dev per-app react-native CLI resolution', () => {
   it('resolves each app CLI from its own root', async () => {
     // Threat-adjacent semantics: the CLI an app runs with is the one

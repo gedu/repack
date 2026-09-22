@@ -201,6 +201,11 @@ export const federationDevCommandOptions = [
     description:
       'Print the plan a live run would use and exit without spawning anything',
   },
+  {
+    name: '--config <path>',
+    description:
+      'Path to a specific repack-federation.json (default: the nearest one up from the current directory)',
+  },
 ];
 
 export const bundleCommandOptions = [

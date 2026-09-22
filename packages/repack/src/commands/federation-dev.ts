@@ -1,3 +1,4 @@
+import fs from 'node:fs';
 import http from 'node:http';
 import path from 'node:path';
 import * as colorette from 'colorette';
@@ -118,9 +119,26 @@ export async function federationDev(
     return;
   }
 
+  // --config <path>: a specific workspace file instead of the walk-up
+  // default. Resolved against the caller's cwd up front; everything
+  // downstream anchors on THIS file's directory as usual.
+  let explicitConfigPath: string | undefined;
+  if (args.config !== undefined) {
+    explicitConfigPath = path.resolve(args.config);
+    if (!fs.existsSync(explicitConfigPath)) {
+      usageError(
+        `--config ${explicitConfigPath} does not exist — pass the path to ` +
+          'your repack-federation.json.'
+      );
+      return;
+    }
+  }
+
   let loaded: ReturnType<typeof loadFederationConfig>;
   try {
-    loaded = loadFederationConfig();
+    loaded = loadFederationConfig(
+      explicitConfigPath ? { filePath: explicitConfigPath } : {}
+    );
   } catch (error) {
     if (error instanceof ConfigFileInvalidError) {
       usageError(`${error.filePath}: ${error.reasons.join('; ')}`);

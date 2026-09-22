@@ -232,12 +232,19 @@ export function describeJsonParseFailure(
  * file exists; throws `ConfigFileInvalidError` for malformed JSON or schema
  * violations — the calling tool maps that to exit code 2.
  */
-export function loadFederationConfig(options: { cwd?: string } = {}): {
+export function loadFederationConfig(
+  options: {
+    cwd?: string;
+    /** Use this exact config file instead of walking up from `cwd`. */
+    filePath?: string;
+  } = {}
+): {
   filePath: string;
   config: FederationConfig;
 } | null {
-  const filePath = findConfigPath(options.cwd ?? process.cwd());
-  if (!filePath) return null;
+  const filePath =
+    options.filePath ?? findConfigPath(options.cwd ?? process.cwd());
+  if (!filePath || !fs.existsSync(filePath)) return null;
 
   const rawText = fs.readFileSync(filePath, 'utf-8');
   let parsed: unknown;

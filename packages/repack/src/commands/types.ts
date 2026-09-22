@@ -79,6 +79,8 @@ export interface FederationDevArguments {
   json?: boolean;
   /** Print the plan and spawn nothing. */
   dryRun?: boolean;
+  /** Specific repack-federation.json to run; overrides the walk-up default. */
+  config?: string;
 }
 
 export interface FederationInitArguments {

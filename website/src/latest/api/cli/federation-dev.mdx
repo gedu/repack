@@ -77,6 +77,10 @@ Skip the wizard even on a TTY. The session is then the deterministic default: ho
 
 Print the plan as one `{"event":"plan", …}` document before spawning, and `{"event":"status", …}` documents whenever app health transitions. Each app entry carries `name`, `role`, `root`, `config`, `bundler`, `port` (`null` for auto-allocated in dry runs), `url`, `command` and `status` (`planned`/`starting`/`running`/`failed`/`exited`). Child logs stay plain `[name]`-prefixed lines on stdout; parse stdout line by line and keep only lines starting with `{`.
 
+### `--config <path>`
+
+Use a specific `repack-federation.json` instead of the nearest one up from the current directory. The path is resolved against your shell's cwd; app roots, configs and ports then anchor on **that file's** directory, exactly as with the default lookup. A missing path or an invalid file exits 2 naming it — nothing spawns.
+
 ### `--dry-run`
 
 Print the exact plan a live run would use — configs, ports, URLs and full commands — then exit without spawning anything. Port-conflict rules still run read-only: a busy declared port fails a dry run the same way it would fail the real one. Unmanaged ports display as `auto` (the table), `null` (the JSON).
