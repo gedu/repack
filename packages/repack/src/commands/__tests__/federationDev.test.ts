@@ -5,6 +5,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { PassThrough } from 'node:stream';
 import execa from 'execa';
+import packageJson from '../../../package.json';
 import { runAdbReverse } from '../common/runAdbReverse.js';
 import * as portPlanner from '../federation/portPlanner.js';
 import * as wizard from '../federation/wizard.js';
@@ -402,6 +403,34 @@ describe('federation-dev live session', () => {
     expect(output()).toContain('MiniApp');
     expect(output()).toContain('8082');
     expect(execaMock).not.toHaveBeenCalled();
+  });
+
+  it('human dry-run opens with the repack banner', async () => {
+    await federationDev([], cliConfig, { dryRun: true });
+    const text = output();
+    expect(text).toContain('Re.Pack');
+    expect(text).toContain(`v${packageJson.version}`);
+    expect(text).toContain(
+      'one supervised session for your module-federation workspace'
+    );
+    // The banner is context, not a replacement: the plan still prints.
+    expect(text).toContain('PLAN');
+  });
+
+  it('--dry-run --json keeps the banner out of stdout', async () => {
+    await federationDev([], cliConfig, { dryRun: true, json: true });
+    const raw = stdoutSpy.mock.calls
+      .map((call: unknown[]) => String(call[0]))
+      .join('');
+    expect(raw).not.toContain('Re.Pack');
+    expect(raw).not.toContain('one supervised session');
+    // stdout stays a pure JSON contract.
+    expect(
+      raw
+        .trim()
+        .split('\n')
+        .every((line) => line.startsWith('{'))
+    ).toBe(true);
   });
 
   it('--dry-run --json is byte-identical across runs and spawns nothing', async () => {

@@ -1,5 +1,7 @@
 import http from 'node:http';
 import path from 'node:path';
+import * as colorette from 'colorette';
+import packageJson from '../../package.json';
 import { CLIError } from '../helpers/index.js';
 import { runAdbReverse } from './common/runAdbReverse.js';
 import {
@@ -8,6 +10,7 @@ import {
   FEDERATION_CONFIG_FILENAME,
   loadFederationConfig,
 } from './federation/configFile.js';
+import { devHeader } from './federation/devHeader.js';
 import type { PlanInput, PlannedApp } from './federation/devPlan.js';
 import { buildPlan } from './federation/devPlan.js';
 import { isPortBusy, planPorts } from './federation/portPlanner.js';
@@ -177,6 +180,17 @@ export async function federationDev(
   } catch (error) {
     usageError(error instanceof Error ? error.message : String(error));
     return;
+  }
+
+  // Session context before anything else speaks (start.ts logo precedent):
+  // a one-shot write, while stdout is still unowned — the wizard, plan and
+  // status block all come after it. `--json` keeps stdout a pure contract.
+  if (!args.json) {
+    process.stdout.write(
+      `${devHeader(packageJson.version, {
+        colors: process.stdout.isTTY === true && colorette.isColorSupported,
+      })}\n\n`
+    );
   }
 
   // Wizard gate: --apps, --no-interactive or a non-TTY stdout suppress the
