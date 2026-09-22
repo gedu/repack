@@ -3,10 +3,12 @@ import os from 'node:os';
 import path from 'node:path';
 import { CLIError } from '../../../helpers/index.js';
 import {
+  assertRemoteStandalone,
   assertStandaloneSupported,
   ConfigFileInvalidError,
   describeJsonParseFailure,
   FEDERATION_CONFIG_FILENAME,
+  type FederationConfig,
   findConfigPath,
   loadFederationConfig,
   resolveFederationWorkspace,
@@ -480,5 +482,48 @@ describe('assertStandaloneSupported', () => {
       path.join(malformedDir, FEDERATION_CONFIG_FILENAME)
     );
     expect(message).not.toMatch(/\n\s+at\s/);
+  });
+});
+
+describe('assertRemoteStandalone', () => {
+  const configPath = path.join(
+    FIXTURES,
+    'config-standalone',
+    FEDERATION_CONFIG_FILENAME
+  );
+  const config: FederationConfig = {
+    host: { manifest: './manifests/host.json', root: '.' },
+    remotes: {
+      supported: {
+        manifest: './manifests/supported.json',
+        standalone: true,
+      },
+      undeclared: { manifest: './manifests/undeclared.json' },
+      declined: { manifest: './manifests/declined.json', standalone: false },
+    },
+  };
+
+  it('refuses a name without standalone: true, naming remote + field + file', () => {
+    expect(() =>
+      assertRemoteStandalone(config, configPath, 'undeclared')
+    ).toThrow(
+      '--standalone refused: remote "undeclared" does not declare ' +
+        `standalone support. Set "standalone": true for it in ${configPath}.`
+    );
+    expect(() =>
+      assertRemoteStandalone(config, configPath, 'declined')
+    ).toThrow('remote "declined" does not declare standalone support');
+  });
+
+  it('proceeds for a declared remote and for a name with no entry', () => {
+    // Unknown names are the command layer's unknown-`--apps` error (exit 2);
+    // this gate only refuses DECLARED-but-unsupported entries — the same
+    // "matches nothing ⇒ proceed" rule the root-keyed shipped with.
+    expect(() =>
+      assertRemoteStandalone(config, configPath, 'supported')
+    ).not.toThrow();
+    expect(() =>
+      assertRemoteStandalone(config, configPath, 'ghost')
+    ).not.toThrow();
   });
 });

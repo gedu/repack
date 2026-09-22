@@ -375,12 +375,37 @@ export function resolveFederationWorkspace(
 }
 
 /**
+ * Tooling-side gate for `--standalone`, name-keyed: refuse when the loaded
+ * config declares a remote entry by that name WITHOUT `standalone: true`.
+ * A name with no entry proceeds unopposed — unknown names are the calling
+ * command's own error, and standalone needs no declaration to *work*, only
+ * support-refusal needs the file. This is the single refuse-rule; the
+ * root-keyed `assertStandaloneSupported` is a wrapper over it, so shipped
+ * semantics and messages never drift. Bundler-runtime code never calls
+ * this and never reads the workspace map.
+ */
+export function assertRemoteStandalone(
+  config: FederationConfig,
+  configPath: string,
+  remoteName: string
+): void {
+  const entry = config.remotes[remoteName];
+  if (!entry) return;
+  if (entry.standalone !== true) {
+    throw new CLIError(
+      `--standalone refused: remote "${remoteName}" does not declare standalone support. ` +
+        `Set "standalone": true for it in ${configPath}.`
+    );
+  }
+}
+
+/**
  * Tooling-side gate for `--standalone`: refuse only when a
  * `repack-federation.json` exists AND declares the app's entry as not
  * supporting standalone. No config file, or a root matching no remote
  * entry, proceeds unopposed — standalone needs no declaration to *work*,
- * only support-refusal needs the file. Bundler-runtime code never calls
- * this and never reads the workspace map.
+ * only support-refusal needs the file. Thin root-keyed wrapper over
+ * `assertRemoteStandalone` (the one refuse-rule).
  */
 export function assertStandaloneSupported(rootDir: string): void {
   const target = path.resolve(rootDir);
@@ -404,12 +429,7 @@ export function assertStandaloneSupported(rootDir: string): void {
   for (const [name, entry] of Object.entries(loaded.config.remotes)) {
     const entryRoot = path.resolve(configDir, entry.root ?? '.');
     if (entryRoot !== target) continue;
-    if (entry.standalone !== true) {
-      throw new CLIError(
-        `--standalone refused: remote "${name}" does not declare standalone support. ` +
-          `Set "standalone": true for it in ${loaded.filePath}.`
-      );
-    }
+    assertRemoteStandalone(loaded.config, loaded.filePath, name);
     return;
   }
 }
