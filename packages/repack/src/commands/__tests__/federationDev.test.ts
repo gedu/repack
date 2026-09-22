@@ -716,4 +716,179 @@ describe('federation-dev live session', () => {
     expect(firstRun[0]!.event).toBe('plan');
     expect(execaMock).not.toHaveBeenCalled();
   });
+
+  describe('app launch (--launch / wizard yes)', () => {
+    // Servers answer /status on OS-assigned ports so readiness happens for
+    // real without touching well-known ports; the launch child itself is
+    // the mocked execa — no device, no gradle, no xcode.
+    const startLaunchWorkspace = () =>
+      Promise.all([startServer(0), startServer(0)]).then(
+        ([hostPort, remotePort]) => {
+          liveWorkspace = fs.mkdtempSync(path.join(FIXTURES, 'launch-'));
+          fs.writeFileSync(
+            path.join(liveWorkspace, 'repack-federation.json'),
+            JSON.stringify({
+              host: { manifest: './build/host', root: '.', port: hostPort },
+              remotes: {
+                MiniApp: {
+                  manifest: './build/mini',
+                  root: '.',
+                  port: remotePort,
+                },
+              },
+            })
+          );
+          process.chdir(liveWorkspace);
+          return { hostPort, remotePort };
+        }
+      );
+
+    /** execa calls whose argv is an app-launch command, with child indexes. */
+    const launchCalls = () =>
+      execaMock.mock.calls
+        .map((call, index) => ({
+          argv: (
+            call as unknown as [string, string[], Record<string, unknown>]
+          )[1],
+          index,
+        }))
+        .filter((entry) =>
+          entry.argv.some((a) => /^run-(ios|android)$/.test(a))
+        );
+
+    it('--launch --platform android spawns run-android exactly once on first host readiness', async () => {
+      const { hostPort } = await startLaunchWorkspace();
+      const command = federationDev([], cliConfig, {
+        apps: 'MiniApp',
+        platform: 'android',
+        launch: true,
+        interactive: false,
+      });
+      await waitFor(
+        () => launchCalls().length === 1,
+        12000,
+        () => `launch calls: ${launchCalls().length}`
+      );
+      const call = execaMock.mock.calls[launchCalls()[0]!.index] as unknown as [
+        string,
+        string[],
+        Record<string, unknown>,
+      ];
+      // Same execa discipline as the supervisor's children.
+      expect(call[0]).toBe(process.execPath);
+      expect(call[1]).toEqual([
+        expect.stringMatching(/react-native[\\/]cli\.js$/),
+        'run-android',
+        '--no-packager',
+      ]);
+      expect(call[2].cwd).toBe(fs.realpathSync(liveWorkspace));
+      expect(call[2].shell).toBeFalsy();
+      expect(call[2].stdin).toBe('ignore');
+      // One-shot discipline: readiness keeps being observed (the remote
+      // also flips running), yet the launch never respawns.
+      await new Promise((resolve) => setTimeout(resolve, 1500));
+      expect(launchCalls()).toHaveLength(1);
+      // The launch reached the mocked child as a plain execa spawn; no
+      // packager child (start) beyond host + MiniApp.
+      const startCalls = execaMock.mock.calls.filter((c) =>
+        (c as unknown as [string, string[]])[1].includes('start')
+      );
+      expect(startCalls).toHaveLength(2);
+      expect(hostPort).toBeGreaterThan(0);
+      for (const child of children) child.emit('exit', 0, null);
+      await command;
+      expect(exitSpy).toHaveBeenLastCalledWith(0);
+    }, 30000);
+
+    it('default without any launch flag never spawns a run command', async () => {
+      await startLaunchWorkspace();
+      const command = federationDev([], cliConfig, {
+        apps: 'MiniApp',
+        platform: 'android',
+        interactive: false,
+      });
+      await waitFor(() => execaMock.mock.calls.length === 2);
+      // Long enough for the first readiness tick to have fired.
+      await new Promise((resolve) => setTimeout(resolve, 1200));
+      expect(launchCalls()).toHaveLength(0);
+      for (const child of children) child.emit('exit', 0, null);
+      await command;
+    }, 30000);
+
+    it('a wizard "yes" drives the same launch without any launch flag', async () => {
+      const { hostPort, remotePort } = await startLaunchWorkspace();
+      const originalIsTTY = process.stdout.isTTY;
+      process.stdout.isTTY = true;
+      try {
+        jest.spyOn(wizard, 'runWizard').mockResolvedValue({
+          status: 'completed',
+          answers: {
+            session: { remotes: ['MiniApp'] },
+            platform: 'android',
+            launch: true,
+            ports: { host: hostPort, MiniApp: remotePort },
+          },
+        } as never);
+        const command = federationDev([], cliConfig, {});
+        await waitFor(
+          () => launchCalls().length === 1,
+          12000,
+          () => `launch calls: ${launchCalls().length}`
+        );
+        expect(launchCalls()[0]!.argv).toContain('run-android');
+        for (const child of children) child.emit('exit', 0, null);
+        await command;
+      } finally {
+        process.stdout.isTTY = originalIsTTY;
+      }
+    }, 30000);
+
+    it('--launch with no narrowed platform exits 2 naming --platform, spawning nothing', async () => {
+      await federationDev([], cliConfig, {
+        apps: 'MiniApp',
+        launch: true,
+        interactive: false,
+      });
+      expect(exitSpy).toHaveBeenCalledWith(2);
+      expect(output()).toContain('--platform');
+      expect(execaMock).not.toHaveBeenCalled();
+    });
+
+    it('a failed launch streams through [launch] and never fails the session', async () => {
+      await startLaunchWorkspace();
+      const command = federationDev([], cliConfig, {
+        apps: 'MiniApp',
+        platform: 'android',
+        launch: true,
+        interactive: false,
+      });
+      await waitFor(() => launchCalls().length === 1);
+      const launchIndex = launchCalls()[0]!.index;
+      children[launchIndex]!.emit('exit', 1, null);
+      // The dev servers are healthy: the user quitting ends the session 0
+      // even though the launch child failed — servers own the exit code.
+      for (const child of children) child.emit('exit', 0, null);
+      await command;
+      expect(output()).toContain('[launch] exited with code 1');
+      expect(exitSpy).toHaveBeenLastCalledWith(0);
+    }, 30000);
+
+    it('shutdown kills an in-flight launch child with the session', async () => {
+      await startLaunchWorkspace();
+      const command = federationDev([], cliConfig, {
+        apps: 'MiniApp',
+        platform: 'android',
+        launch: true,
+        interactive: false,
+      });
+      await waitFor(() => launchCalls().length === 1);
+      const launchChild = children[launchCalls()[0]!.index]!;
+      // One Ctrl-C: the supervisor's ordered shutdown covers the launch too.
+      process.emit('SIGINT');
+      expect(launchChild.kill).toHaveBeenCalledWith('SIGINT');
+      for (const child of children) child.emit('exit', 0, null);
+      await command;
+      expect(exitSpy).toHaveBeenLastCalledWith(0);
+    }, 30000);
+  });
 });

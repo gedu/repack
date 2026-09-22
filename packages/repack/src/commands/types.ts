@@ -66,7 +66,15 @@ export interface FederationDoctorArguments {
 export interface FederationDevArguments {
   /** Comma-separated remote names; absent means every declared remote. */
   apps?: string | string[];
+  /** App platform for child compile scope and run guidance; validated by the command. */
   platform?: string;
+  /**
+   * --launch / --no-launch: true launches the app on first readiness,
+   * false never, absent defers to the wizard (TTY) or means no (CI).
+   */
+  launch?: boolean;
+  /** Device id forwarded verbatim to run-<platform>. */
+  device?: string;
   /** Host dev-server port; parsed Number, range-checked by the command. */
   port?: number;
   /** Reassign busy declared ports instead of failing with a conflict. */

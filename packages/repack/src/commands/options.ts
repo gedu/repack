@@ -174,6 +174,22 @@ export const federationDevCommandOptions = [
     description: 'App platform to print run guidance for: "ios" or "android"',
   },
   {
+    name: '--launch',
+    description:
+      'Launch the app on the device once the session is ready (requires a single --platform; the wizard asks when neither launch flag is given on a TTY)',
+  },
+  {
+    name: '--no-launch',
+    description:
+      'Never launch the app — serve only (the default without a TTY or with --no-interactive)',
+  },
+  {
+    name: '--device <id>',
+    description:
+      'Device id passed through verbatim to react-native run-<platform> (only meaningful with --launch)',
+    parse: (val: string) => val,
+  },
+  {
     name: '--port <port>',
     description:
       'Host dev-server port (overrides the port declared in repack-federation.json)',

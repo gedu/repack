@@ -31,6 +31,13 @@ export interface PlanInput {
     port?: number;
     platform?: 'ios' | 'android';
     configChoices?: Record<string, string>;
+    /**
+     * The single launch decision: flags seed it, the wizard rewrites it —
+     * exactly like the other overrides. `buildPlan` itself ignores it (the
+     * launch child is not a `start` argv); `federation-dev` consumes it
+     * after the final plan, so wizard and flag runs share one source.
+     */
+    launch?: boolean;
   };
   /** From the port planner; `'auto'` only in dry-run for unmanaged apps. */
   ports: Record<string, number | 'auto'>;

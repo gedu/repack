@@ -14,6 +14,7 @@ import {
 import { devHeader } from './federation/devHeader.js';
 import type { PlanInput, PlannedApp } from './federation/devPlan.js';
 import { buildPlan } from './federation/devPlan.js';
+import { buildLaunchPlan } from './federation/launchPlan.js';
 import { isPortBusy, planPorts } from './federation/portPlanner.js';
 import { resolveReactNativeBin } from './federation/rnBin.js';
 import { RunnerConsole } from './federation/runnerConsole.js';
@@ -242,6 +243,7 @@ export async function federationDev(
     overrides: {
       port: args.port,
       platform: args.platform === 'android' ? 'android' : args.platform,
+      launch: args.launch,
     },
     ports: {},
     rnCliForRoot,
@@ -265,7 +267,11 @@ export async function federationDev(
     args.interactive !== false &&
     process.stdout.isTTY
   ) {
-    const outcome = await runWizard({ config, planned: effective });
+    const outcome = await runWizard({
+      config,
+      planned: effective,
+      launch: planBase.overrides.launch,
+    });
     if (outcome.status === 'cancelled') {
       // Cancel is a clean no-op, not a failure (init prompts precedent).
       process.exit(0);
@@ -281,6 +287,9 @@ export async function federationDev(
     };
     if (answers.platform !== undefined) {
       planBase.overrides.platform = answers.platform;
+    }
+    if (answers.launch !== undefined) {
+      planBase.overrides.launch = answers.launch;
     }
     try {
       effective = buildPlan({ ...planBase, ports: answers.ports });
@@ -332,6 +341,23 @@ export async function federationDev(
   }
 
   const plan = buildPlan({ ...planBase, ports });
+  const host = plan.find((app) => app.role === 'host')!;
+  // The effective platform lives in the final plan (flags and wizard
+  // answers both land there as `--platform <p>` on every child) — reading
+  // args directly would print the flag's value over a wizard selection.
+  const platformFlagIndex = host.spawn.args.indexOf('--platform');
+  const platform =
+    platformFlagIndex >= 0 ? host.spawn.args[platformFlagIndex + 1] : undefined;
+
+  // Launch needs exactly one platform to run-<platform> against — the same
+  // platform the final plan carries, so a wizard selection counts here too.
+  if (planBase.overrides.launch === true && platform === undefined) {
+    usageError(
+      '--launch needs a single platform: pass --platform ios or --platform ' +
+        'android (or --no-launch to serve only).'
+    );
+    return;
+  }
 
   // From here on the sink is the one stdout owner (D5 row H): plan, logs,
   // status block and JSON contracts all route through it, nothing else
@@ -357,13 +383,6 @@ export async function federationDev(
   // `runAdbReverse` helper exactly once (device discovery lives inside it);
   // remote ports are printed guidance only — the runner never executes adb
   // for them (threat row "adb execution").
-  const host = plan.find((app) => app.role === 'host')!;
-  // The effective platform lives in the final plan (flags and wizard
-  // answers both land there as `--platform <p>` on every child) — reading
-  // args directly would print the flag's value over a wizard selection.
-  const platformFlagIndex = host.spawn.args.indexOf('--platform');
-  const platform =
-    platformFlagIndex >= 0 ? host.spawn.args[platformFlagIndex + 1] : undefined;
   await runAdbReverse({ port: host.port as number });
   for (const app of plan) {
     if (app.role === 'remote') {
@@ -383,7 +402,34 @@ export async function federationDev(
   // The keymap disclosure (D5 row F): exactly these keys do something.
   runnerConsole.persist(['Keys: q quit | d open debugger | Ctrl-C quit']);
 
-  const supervisor = new DevSupervisor(plan, runnerConsole, { probeStatus });
+  // Readiness-gated one-shot app launch: the target is the standalone
+  // remote's project in a standalone session, the host's otherwise, and it
+  // spawns the FIRST time THAT app's dev server answers — never again,
+  // whatever readiness does later.
+  const launchTarget =
+    planBase.overrides.launch === true &&
+    (platform === 'ios' || platform === 'android')
+      ? buildLaunchPlan({
+          plan,
+          platform,
+          ...(args.device === undefined ? {} : { device: args.device }),
+          rnCliForRoot,
+        })
+      : undefined;
+  let launchSpawned = false;
+  const supervisor = new DevSupervisor(plan, runnerConsole, {
+    probeStatus,
+    ...(launchTarget === undefined
+      ? {}
+      : {
+          onFirstReady: (appName: string) => {
+            if (appName === launchTarget.triggerApp && !launchSpawned) {
+              launchSpawned = true;
+              supervisor.spawnOneShot(launchTarget);
+            }
+          },
+        }),
+  });
   // One Ctrl-C asks for the supervisor's ordered shutdown; the second one
   // escalates inside the supervisor (SIGINT → grace → SIGTERM).
   const onSigint = () => supervisor.shutdown('interrupt');
