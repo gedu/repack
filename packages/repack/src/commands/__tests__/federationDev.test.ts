@@ -1,12 +1,25 @@
+import { EventEmitter } from 'node:events';
 import fs from 'node:fs';
+import http from 'node:http';
 import os from 'node:os';
 import path from 'node:path';
+import { PassThrough } from 'node:stream';
 import execa from 'execa';
+import { runAdbReverse } from '../common/runAdbReverse.js';
 import * as portPlanner from '../federation/portPlanner.js';
 import { federationDev } from '../federation-dev.js';
 
 jest.mock('execa');
 const execaMock = execa as unknown as jest.Mock;
+
+jest.mock('../common/runAdbReverse.js');
+const adbMock = runAdbReverse as jest.Mock;
+
+class FakeChild extends EventEmitter {
+  stdout = new PassThrough();
+  stderr = new PassThrough();
+  kill = jest.fn();
+}
 
 const FIXTURES = path.join(
   __dirname,
@@ -147,6 +160,195 @@ describe('federation-dev non-TTY defaults', () => {
     const text = output();
     expect(text).toContain('host');
     expect(text).toContain('MiniApp');
+    expect(execaMock).not.toHaveBeenCalled();
+  });
+});
+
+describe('federation-dev live session', () => {
+  let children: FakeChild[];
+  let servers: http.Server[];
+  let liveWorkspace: string;
+
+  // OS-assigned free port when 0; resolves with the port actually bound.
+  const startServer = (port: number) =>
+    new Promise<number>((resolve, reject) => {
+      const server = http.createServer((_req, res) => {
+        // The readiness contract real dev servers answer on /status.
+        res.writeHead(200, { 'content-type': 'text/plain' });
+        res.end('packager-status:running');
+      });
+      server.once('error', reject);
+      server.listen(port, () => {
+        servers.push(server);
+        resolve((server.address() as { port: number }).port);
+      });
+    });
+
+  const waitFor = async (
+    predicate: () => boolean,
+    timeoutMs = 8000,
+    describeState: () => string = () => ''
+  ) => {
+    const deadline = Date.now() + timeoutMs;
+    while (!predicate()) {
+      if (Date.now() > deadline)
+        throw new Error(`waitFor timed out: ${describeState()}`);
+      await new Promise((resolve) => setTimeout(resolve, 20));
+    }
+  };
+
+  beforeEach(() => {
+    children = [];
+    servers = [];
+    liveWorkspace = '';
+    execaMock.mockImplementation(() => {
+      const child = new FakeChild();
+      children.push(child);
+      return child;
+    });
+  });
+
+  afterEach(async () => {
+    for (const child of children) child.emit('exit', 0, null);
+    if (liveWorkspace)
+      fs.rmSync(liveWorkspace, { recursive: true, force: true });
+    await Promise.all(
+      servers.map(
+        (server) =>
+          new Promise<void>((resolve) => {
+            server.close(() => resolve());
+            // Readiness pollers keep a socket pool warm; force-kill the
+            // keep-alive handles so close() cannot hang the suite.
+            server.closeAllConnections?.();
+          })
+      )
+    );
+  });
+
+  it('spawns host + selected remote with the requested port, prints adb guidance, never runs adb itself', async () => {
+    // No servers needed: the assertions cover spawn argv and guidance, and
+    // a clean exit-0 ends the session whatever the readiness state.
+    const command = federationDev([], cliConfig, {
+      apps: 'MiniApp',
+      platform: 'ios',
+      port: 8090,
+      interactive: false,
+    });
+    await waitFor(() => execaMock.mock.calls.length === 2);
+
+    const spawnArgs = execaMock.mock.calls.map(
+      (call) => (call as unknown as [string, string[]])[1]
+    );
+    expect(spawnArgs).toHaveLength(2);
+    const hostArgs = spawnArgs.find((a) => a.includes('8090'));
+    const remoteArgs = spawnArgs.find((a) => a.includes('8082'));
+    expect(hostArgs).toBeDefined();
+    expect(remoteArgs).toBeDefined();
+    for (const args of spawnArgs) {
+      expect(args).toContain('--no-interactive');
+      // Threat row "adb execution": no adb ever rides the spawn mock.
+      expect(args.join(' ')).not.toContain('adb');
+    }
+    // Host port goes through the audited runAdbReverse helper, once.
+    expect(adbMock).toHaveBeenCalledTimes(1);
+    expect(adbMock).toHaveBeenCalledWith(
+      expect.objectContaining({ port: 8090 })
+    );
+    // Remote port is guidance for the developer, not an executed command.
+    expect(output()).toContain('adb reverse tcp:8082 tcp:8082');
+    // Platform guidance names the runnable command and the host port.
+    expect(output()).toContain('run-ios');
+    expect(output()).toContain('8090');
+
+    for (const child of children) child.emit('exit', 0, null);
+    await command;
+    expect(exitSpy).toHaveBeenLastCalledWith(0);
+  }, 20000);
+
+  it('--json live emits a parseable plan doc and status docs ending exited', async () => {
+    // OS-assigned ports inside a workspace under the fixtures tree (so the
+    // repo's react-native stays resolvable): well-known 8081/8082 may be
+    // held by real dev servers on the developer's machine.
+    const hostPort = await startServer(0);
+    const remotePort = await startServer(0);
+    liveWorkspace = fs.mkdtempSync(path.join(FIXTURES, 'live-'));
+    fs.writeFileSync(
+      path.join(liveWorkspace, 'repack-federation.json'),
+      JSON.stringify({
+        host: { manifest: './build/host', root: '.', port: hostPort },
+        remotes: {
+          MiniApp: { manifest: './build/mini', root: '.', port: remotePort },
+        },
+      })
+    );
+    process.chdir(liveWorkspace);
+
+    const command = federationDev([], cliConfig, {
+      apps: 'MiniApp',
+      json: true,
+      interactive: false,
+    });
+    await waitFor(() => execaMock.mock.calls.length === 2);
+    const docsUpToRunning = () =>
+      logSpy.mock.calls
+        .map((call) => String(call[0]))
+        .filter((line) => line.startsWith('{'))
+        .map((line) => JSON.parse(line));
+    await waitFor(
+      () => {
+        const docs = docsUpToRunning().filter((d) => d.event === 'status');
+        return (
+          docs.length > 0 &&
+          docs[docs.length - 1].apps.every(
+            (app: { status: string }) => app.status === 'running'
+          )
+        );
+      },
+      12000,
+      () =>
+        JSON.stringify({
+          spawnCalls: execaMock.mock.calls.length,
+          children: children.length,
+          docs: docsUpToRunning().map((doc) => doc.event),
+        })
+    );
+    for (const child of children) child.emit('exit', 0, null);
+    await command;
+
+    const docs = docsUpToRunning();
+    expect(docs[0].event).toBe('plan');
+    const finalDoc = docs[docs.length - 1];
+    expect(finalDoc.event).toBe('status');
+    expect(finalDoc.apps.map((app: { status: string }) => app.status)).toEqual([
+      'exited',
+      'exited',
+    ]);
+    expect(exitSpy).toHaveBeenLastCalledWith(0);
+  }, 20000);
+
+  it('exits 1 naming app and busy port without spawning or hanging', async () => {
+    jest
+      .spyOn(portPlanner, 'isPortBusy')
+      .mockImplementation(async (port: number) => port === 8082);
+    const command = federationDev([], cliConfig, {
+      apps: 'MiniApp',
+      interactive: false,
+    });
+    await expect(command).resolves.toBeUndefined();
+    expect(exitSpy).toHaveBeenCalledWith(1);
+    expect(output()).toContain('MiniApp');
+    expect(output()).toContain('8082');
+    expect(execaMock).not.toHaveBeenCalled();
+  });
+
+  it('--dry-run --json is byte-identical across runs and spawns nothing', async () => {
+    await federationDev([], cliConfig, { dryRun: true, json: true });
+    const firstRun = logSpy.mock.calls.map((call) => String(call[0]));
+    logSpy.mockClear();
+    await federationDev([], cliConfig, { dryRun: true, json: true });
+    const secondRun = logSpy.mock.calls.map((call) => String(call[0]));
+    expect(secondRun).toEqual(firstRun);
+    expect(JSON.parse(firstRun[0]!).event).toBe('plan');
     expect(execaMock).not.toHaveBeenCalled();
   });
 });

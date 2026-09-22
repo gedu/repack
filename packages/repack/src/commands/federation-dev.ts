@@ -1,5 +1,7 @@
+import http from 'node:http';
 import path from 'node:path';
 import { CLIError } from '../helpers/index.js';
+import { runAdbReverse } from './common/runAdbReverse.js';
 import {
   assertRemoteStandalone,
   ConfigFileInvalidError,
@@ -10,8 +12,40 @@ import type { PlanInput, PlannedApp } from './federation/devPlan.js';
 import { buildPlan } from './federation/devPlan.js';
 import { isPortBusy, planPorts } from './federation/portPlanner.js';
 import { resolveReactNativeBin } from './federation/rnBin.js';
-import { planToJson, renderPlanTable } from './federation/statusTable.js';
+import { RunnerConsole } from './federation/runnerConsole.js';
+import {
+  planToJson,
+  renderPlanTable,
+  renderStatusTable,
+  statusToJson,
+} from './federation/statusTable.js';
+import { DevSupervisor } from './federation/supervisor.js';
 import type { CliConfig, FederationDevArguments } from './types.js';
+
+/**
+ * Readiness/TOCTOU probe: `GET url/status` answers with its body, anything
+ * else (refused, timeout, non-200) is silence — never a thrown error, the
+ * supervisor treats both as "not up".
+ */
+function probeStatus(url: string): Promise<string | null> {
+  return new Promise((resolve) => {
+    const request = http.get(`${url}/status`, { timeout: 1000 }, (response) => {
+      let body = '';
+      response.setEncoding('utf8');
+      response.on('data', (chunk: string) => {
+        body += chunk;
+      });
+      response.on('end', () =>
+        resolve(response.statusCode === 200 ? body : null)
+      );
+    });
+    request.on('error', () => resolve(null));
+    request.on('timeout', () => {
+      request.destroy();
+      resolve(null);
+    });
+  });
+}
 
 /** Split `--apps` into names, tolerating a merged array from the CLI. */
 function parseAppList(apps: string | string[] | undefined): string[] {
@@ -208,5 +242,61 @@ export async function federationDev(
 
   const plan = buildPlan({ ...planBase, ports });
   printPlan(plan, args.json === true);
-  process.exit(0);
+
+  if (args.dryRun) {
+    process.exit(0);
+    return;
+  }
+
+  // Live session. adb: the host port goes through the audited
+  // `runAdbReverse` helper exactly once (device discovery lives inside it);
+  // remote ports are printed guidance only — the runner never executes adb
+  // for them (threat row "adb execution").
+  const host = plan.find((app) => app.role === 'host')!;
+  const runnerConsole = new RunnerConsole({ stdout: process.stdout });
+  const platform = args.platform ?? 'ios';
+  await runAdbReverse({ port: host.port as number });
+  for (const app of plan) {
+    if (app.role === 'remote') {
+      console.log(
+        `Remote port: run "adb reverse tcp:${app.port} tcp:${app.port}" on ` +
+          'your device to reach it from the app.'
+      );
+    }
+  }
+  console.log(
+    `Run your app with: react-native run-${platform} — it reaches the host ` +
+      `dev server at ${host.url}`
+  );
+
+  const supervisor = new DevSupervisor(plan, runnerConsole, { probeStatus });
+  // One Ctrl-C asks for the supervisor's ordered shutdown; the second one
+  // escalates inside the supervisor (SIGINT → grace → SIGTERM).
+  const onSigint = () => supervisor.shutdown('interrupt');
+  process.on('SIGINT', onSigint);
+
+  let lastDoc = '';
+  const statusWatch = setInterval(() => {
+    if (!args.json) return;
+    const doc = statusToJson(plan, supervisor.getStatuses());
+    if (doc !== lastDoc) {
+      lastDoc = doc;
+      console.log(doc);
+    }
+  }, 250);
+
+  const result = await supervisor.run();
+  clearInterval(statusWatch);
+  process.off('SIGINT', onSigint);
+
+  const statuses = supervisor.getStatuses();
+  if (args.json) {
+    console.log(statusToJson(plan, statuses));
+  } else {
+    const rows = renderStatusTable(plan, statuses);
+    for (const row of rows) console.log(row);
+    runnerConsole.persist(rows);
+  }
+  runnerConsole.release();
+  process.exit(result.exitCode);
 }
