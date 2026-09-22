@@ -4,6 +4,8 @@
 
 It is deliberately CI-friendly: with no TTY (or `--no-interactive`) there are no prompts at all — the session is the host plus every declared remote — and `--json` / `--dry-run` give machine-readable, deterministic output.
 
+It is plugin-version agnostic: workspaces on `ModuleFederationPluginV1` or `ModuleFederationPluginV2` are run identically — the runner only knows app roots, configs and ports from the workspace map (see `apps/tester-federation` and `apps/tester-federation-v2` in the repo for both setups).
+
 ## Usage
 
 import { PackageManagerTabs } from '@theme';
@@ -29,6 +31,7 @@ react-native start --bundler <rspack|webpack> [--config <resolved config>] --por
 - The bundler per app is auto-detected the same way `start` does it — from the resolved config file name — and a per-app `--bundler` mismatch never happens because each child resolves only its own.
 - `--no-reverse-port` on every child: adb reversal is the runner's job, not the children's (see [adb](#adb-and-run-guidance)).
 - Each app is started with the `react-native` CLI resolved from **its own root** (Node's upward `node_modules` walk from the app directory — PATH is never consulted). An app rooted where `react-native` does not resolve exits 2 naming that app; the runner never borrows another app's CLI.
+- Tester caveat: apps whose config file switches bundler behind an env flag (the testers' `USE_WEBPACK` wrapper) are invisible to bundler detection — the plan always names the config's default engine, so set the env flag *and* expect the planned `--bundler` to describe the default path, not the env-forced one.
 
 ## The interactive session (wizard)
 

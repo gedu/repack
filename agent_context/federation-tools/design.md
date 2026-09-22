@@ -360,6 +360,30 @@ Deltas from the design above, all deliberate:
   one plain line, `--json` prints nothing (JSON stdout purity is pinned
   by a command test).
 
+### Pre-PR hardening (post-audit)
+
+- **Run guidance follows the final plan, not `args.platform`**: the
+  effective platform is read back from the host's planned
+  `--platform <p>`, so a wizard selection counts; with no platform
+  selected the line names both `run-ios` and `run-android`.
+- **Per-app react-native CLI**: `PlanInput.rnCliPath` became
+  `rnCliForRoot(root)`; `federation-dev` memoizes resolution per distinct
+  app root (single-dir twins still resolve once), `rnBin.ts` dropped the
+  cwd/extraPaths fall-backs, and an unresolvable root exits 2 naming the
+  owning app — no CLI is ever borrowed across apps.
+- **`--config <path>`**: picks a specific `repack-federation.json`
+  (resolved against the caller cwd); `loadFederationConfig` gained a
+  `filePath` option and all anchoring lands on the file's directory;
+  missing/invalid file exits 2 naming the path.
+- **tester-federation-v2 adoption**: same map shape as v1
+  (`HostApp`/`MiniApp`, configs `config.{host,mini}-app.mts`, ports
+  8081/8082, `standalone: true` — its mini config reads
+  `env.argv.standalone`), `start`/`start:dry` scripts;
+  `federation-dev --dry-run --json` verified there.
+- **Dead code**: supervisor's never-fired `'app-exit'` shutdown reason
+  removed; docs state the shipped behavior — a dead child (host
+  included) never ends the session; the user quits explicitly.
+
 ## Referenced surface (verified 2026-09)
 
 - `packages/repack/src/plugins/ModuleFederationPluginV1.ts` / `V2.ts` — no
