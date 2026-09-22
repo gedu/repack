@@ -50,6 +50,18 @@ describe('devHeader', () => {
     expect(header).toContain('\u001b');
   });
 
+  it('prints the global key legend under the banner in both modes', () => {
+    const legend = '↑↓ move · space toggle · enter confirm · Ctrl-C cancel';
+    // Plain mode: the legend is visible with zero ANSI bytes around it.
+    const plain = devHeader('9.8.7', { colors: false });
+    expect(plain).toContain(legend);
+    expect(plain).not.toContain('\u001b');
+    // Color mode: the legend renders dim — ANSI-wrapped but readable.
+    const colored = loadHeaderColored()('9.8.7', { colors: true });
+    expect(stripAnsi(colored)).toContain(legend);
+    expect(colored).toContain(`\u001b[2m${legend}`);
+  });
+
   it('plain mode is free of ANSI escape bytes', () => {
     const header = devHeader('9.8.7', { colors: false });
     expect(header).not.toContain('\u001b');

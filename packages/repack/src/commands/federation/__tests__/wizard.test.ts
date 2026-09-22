@@ -151,6 +151,48 @@ describe('runWizard (clack path)', () => {
     ).toBeUndefined();
   });
 
+  // Every step must be self-explanatory BEFORE any key press: the clack
+  // option carries the key legend and the visible message embeds it (clack
+  // 0.9.1 has no prompt-level hint that renders eagerly).
+  it('every clack step carries its key legend in hint and message', async () => {
+    clack.multiselect.mockResolvedValue(['MiniApp']);
+    clack.select.mockResolvedValue('ios');
+    clack.confirm
+      .mockResolvedValueOnce(false) // host port: override -> text step
+      .mockResolvedValueOnce(true) // MiniApp port
+      .mockResolvedValueOnce(false); // standalone: no
+    clack.text.mockResolvedValue('8090');
+    await runWith(clack);
+
+    const optionsOf = (call: unknown[]): { message: string; hint?: string } =>
+      call[0] as { message: string; hint?: string };
+
+    const multi = optionsOf(clack.multiselect.mock.calls[0]);
+    const multiLegend = '↑↓ move · space toggle · a toggle all · enter confirm';
+    expect(multi.hint).toBe(multiLegend);
+    expect(multi.message).toContain(multiLegend);
+
+    const select = optionsOf(clack.select.mock.calls[0]);
+    const selectLegend = '↑↓ move · enter confirm';
+    expect(select.hint).toBe(selectLegend);
+    expect(select.message).toContain(selectLegend);
+
+    // Port flow: the confirm and the override text both carry the port legend.
+    const portConfirm = optionsOf(clack.confirm.mock.calls[0]);
+    const portLegend = 'type a port · enter to accept';
+    expect(portConfirm.hint).toBe(portLegend);
+    expect(portConfirm.message).toContain(portLegend);
+    const portText = optionsOf(clack.text.mock.calls[0]);
+    expect(portText.hint).toBe(portLegend);
+    expect(portText.message).toContain(portLegend);
+
+    // Standalone confirm gets the left/right legend.
+    const standaloneConfirm = optionsOf(clack.confirm.mock.calls[2]);
+    const standaloneLegend = '←/→ choose · enter confirm';
+    expect(standaloneConfirm.hint).toBe(standaloneLegend);
+    expect(standaloneConfirm.message).toContain(standaloneLegend);
+  });
+
   it('cancel returns the cancelled outcome and says so via clack cancel', async () => {
     clack.multiselect.mockResolvedValue(CANCEL);
     const outcome = await runWith(clack);
@@ -214,6 +256,20 @@ describe('runWizard (readline fallback)', () => {
         ports: { host: 8081, MiniApp: 8082, SideApp: 8083 },
       },
     });
+  });
+
+  it('fallback questions carry the legend inline (readline has no chrome)', async () => {
+    const { captured } = await runFallback([
+      'MiniApp', // remotes
+      'ios', // platform
+      '8090', // host port
+      '', // MiniApp port: default
+      'n', // standalone
+    ]);
+    expect(captured).toContain('type names · enter to accept');
+    expect(captured).toContain('type ios/android · enter to accept');
+    expect(captured).toContain('type a port · enter to accept');
+    expect(captured).toContain('type y/n · enter to accept');
   });
 
   it('EOF on stdin cancels like the clack path', async () => {

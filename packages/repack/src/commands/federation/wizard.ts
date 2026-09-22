@@ -19,6 +19,7 @@ export type WizardOutcome =
 interface ClackLike {
   multiselect(options: {
     message: string;
+    hint?: string;
     options: Array<{ value: string; label: string }>;
     initialValue?: string[];
     maxItems?: number;
@@ -26,18 +27,41 @@ interface ClackLike {
   }): Promise<unknown>;
   select(options: {
     message: string;
+    hint?: string;
     options: Array<{ value: string; label: string }>;
   }): Promise<unknown>;
   confirm(options: {
     message: string;
+    hint?: string;
     initialValue?: boolean;
   }): Promise<unknown>;
   text(options: {
     message: string;
+    hint?: string;
     validate?: (value: string) => string | undefined;
   }): Promise<unknown>;
   cancel(message: string): void;
   isCancel(value: unknown): boolean;
+}
+
+/**
+ * Key legends per step kind. Clack 0.9.1 has no prompt-level `hint` option
+ * (its `hint` is per-option and renders inline next to choices), so the
+ * legend is embedded as a second line of the `message` — the one block clack
+ * renders verbatim from the very first frame, before any key press. The
+ * `hint` field travels alongside for tests and any future clack that grows
+ * a native prompt-level hint.
+ */
+const HINTS = {
+  multiselect: '↑↓ move · space toggle · a toggle all · enter confirm',
+  select: '↑↓ move · enter confirm',
+  confirm: '←/→ choose · enter confirm',
+  port: 'type a port · enter to accept',
+} as const;
+
+/** Message plus its legend line, visible on the first render. */
+function legended(message: string, hint: string) {
+  return { message: `${message}\n${hint}`, hint };
 }
 
 async function loadClackDefault(): Promise<ClackLike> {
@@ -70,7 +94,7 @@ async function runClackWizard(
   const declaredRemotes = Object.keys(config.remotes);
 
   const selected = await clack.multiselect({
-    message: 'Which remotes to run?',
+    ...legended('Which remotes to run?', HINTS.multiselect),
     options: declaredRemotes.map((name) => ({ value: name, label: name })),
     initialValue: declaredRemotes,
     maxItems: 8,
@@ -83,7 +107,7 @@ async function runClackWizard(
   const remotes = selected as string[];
 
   const platformAnswer = await clack.select({
-    message: 'Which app platform are you running?',
+    ...legended('Which app platform are you running?', HINTS.select),
     options: [
       { value: 'ios', label: 'iOS' },
       { value: 'android', label: 'Android' },
@@ -103,7 +127,7 @@ async function runClackWizard(
   for (const app of planned) {
     if (app.role === 'remote' && !remotes.includes(app.name)) continue;
     const keep = await clack.confirm({
-      message: `Use port ${app.port} for ${app.name}?`,
+      ...legended(`Use port ${app.port} for ${app.name}?`, HINTS.port),
       initialValue: true,
     });
     if (clack.isCancel(keep)) {
@@ -115,7 +139,7 @@ async function runClackWizard(
       continue;
     }
     const override = await clack.text({
-      message: `Port for ${app.name}:`,
+      ...legended(`Port for ${app.name}:`, HINTS.port),
       validate: validatePort,
     });
     if (clack.isCancel(override)) {
@@ -131,7 +155,7 @@ async function runClackWizard(
   for (const name of remotes) {
     if (config.remotes[name]?.standalone !== true) continue;
     const runStandalone = await clack.confirm({
-      message: `Run ${name} in standalone mode?`,
+      ...legended(`Run ${name} in standalone mode?`, HINTS.confirm),
       initialValue: false,
     });
     if (clack.isCancel(runStandalone)) {
@@ -218,12 +242,15 @@ async function runReadlineWizard(
     const declaredRemotes = Object.keys(config.remotes);
     const remotes = portListAnswer(
       await rl.question(
-        `Remotes to run (comma-separated, empty = all: ${declaredRemotes.join(', ')}): `
+        `Remotes to run (comma-separated, empty = all: ${declaredRemotes.join(', ')})` +
+          ` — type names · enter to accept: `
       ),
       declaredRemotes
     );
     const platformAnswer = (
-      await rl.question('Platform (ios/android, empty = all): ')
+      await rl.question(
+        'Platform (ios/android, empty = all) — type ios/android · enter to accept: '
+      )
     )
       .trim()
       .toLowerCase();
@@ -235,13 +262,18 @@ async function runReadlineWizard(
     const ports: Record<string, number> = {};
     for (const app of planned) {
       if (app.role === 'remote' && !remotes.includes(app.name)) continue;
-      let answer = (await rl.question(`Port for ${app.name} [${app.port}]: `))
+      let answer = (
+        await rl.question(
+          `Port for ${app.name} [${app.port}] — type a port · enter to accept: `
+        )
+      )
         .trim()
         .toLowerCase();
       while (answer !== '' && validatePort(answer)) {
         answer = (
           await rl.question(
-            `Port for ${app.name} [${app.port}] (integer 1-65535, empty = default): `
+            `Port for ${app.name} [${app.port}] (integer 1-65535, empty = default)` +
+              ` — type a port · enter to accept: `
           )
         )
           .trim()
@@ -254,7 +286,9 @@ async function runReadlineWizard(
     for (const name of remotes) {
       if (config.remotes[name]?.standalone !== true) continue;
       const answer = (
-        await rl.question(`Run ${name} in standalone mode? (y/N): `)
+        await rl.question(
+          `Run ${name} in standalone mode? (y/N) — type y/n · enter to accept: `
+        )
       )
         .trim()
         .toLowerCase();

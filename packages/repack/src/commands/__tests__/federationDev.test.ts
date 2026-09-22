@@ -413,6 +413,10 @@ describe('federation-dev live session', () => {
     expect(text).toContain(
       'one supervised session for your module-federation workspace'
     );
+    // Global key legend right under the banner, plain in this no-color run.
+    expect(text).toContain(
+      '↑↓ move · space toggle · enter confirm · Ctrl-C cancel'
+    );
     // The banner is context, not a replacement: the plan still prints.
     expect(text).toContain('PLAN');
   });
@@ -424,6 +428,7 @@ describe('federation-dev live session', () => {
       .join('');
     expect(raw).not.toContain('Re.Pack');
     expect(raw).not.toContain('one supervised session');
+    expect(raw).not.toContain('Ctrl-C cancel');
     // stdout stays a pure JSON contract.
     expect(
       raw
