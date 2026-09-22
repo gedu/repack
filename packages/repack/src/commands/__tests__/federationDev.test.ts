@@ -40,13 +40,25 @@ const cliConfig = {
 let exitSpy: jest.SpyInstance;
 let logSpy: jest.SpyInstance;
 let errorSpy: jest.SpyInstance;
+let stdoutSpy: jest.SpyInstance;
 let tmpDir: string;
 let previousCwd: string;
 
+// The command's stdout owner writes escape sequences straight to
+// process.stdout; the sink's output has to be captured alongside console.
 const output = () =>
-  [...logSpy.mock.calls, ...errorSpy.mock.calls]
+  [...logSpy.mock.calls, ...errorSpy.mock.calls, ...stdoutSpy.mock.calls]
     .map((call) => call.map(String).join(' '))
     .join('\n');
+
+/** JSON docs the sink wrote to stdout, oldest first. */
+const stdoutDocs = () =>
+  stdoutSpy.mock.calls
+    .map((call: unknown[]) => String(call[0]))
+    .join('')
+    .split('\n')
+    .filter((line: string) => line.startsWith('{'))
+    .map((line: string) => JSON.parse(line));
 
 beforeEach(() => {
   previousCwd = process.cwd();
@@ -56,6 +68,9 @@ beforeEach(() => {
     .mockImplementation((() => undefined) as never);
   logSpy = jest.spyOn(console, 'log').mockImplementation(() => undefined);
   errorSpy = jest.spyOn(console, 'error').mockImplementation(() => undefined);
+  stdoutSpy = jest
+    .spyOn(process.stdout, 'write')
+    .mockImplementation((() => true) as never);
   // Deterministic probes: the developer's machine may really hold 8081/8082.
   jest.spyOn(portPlanner, 'isPortBusy').mockResolvedValue(false);
   process.chdir(TWIN);
@@ -341,11 +356,7 @@ describe('federation-dev live session', () => {
       interactive: false,
     });
     await waitFor(() => execaMock.mock.calls.length === 2);
-    const docsUpToRunning = () =>
-      logSpy.mock.calls
-        .map((call) => String(call[0]))
-        .filter((line) => line.startsWith('{'))
-        .map((line) => JSON.parse(line));
+    const docsUpToRunning = () => stdoutDocs();
     await waitFor(
       () => {
         const docs = docsUpToRunning().filter((d) => d.event === 'status');
@@ -395,12 +406,12 @@ describe('federation-dev live session', () => {
 
   it('--dry-run --json is byte-identical across runs and spawns nothing', async () => {
     await federationDev([], cliConfig, { dryRun: true, json: true });
-    const firstRun = logSpy.mock.calls.map((call) => String(call[0]));
-    logSpy.mockClear();
+    const firstRun = stdoutDocs();
+    stdoutSpy.mockClear();
     await federationDev([], cliConfig, { dryRun: true, json: true });
-    const secondRun = logSpy.mock.calls.map((call) => String(call[0]));
+    const secondRun = stdoutDocs();
     expect(secondRun).toEqual(firstRun);
-    expect(JSON.parse(firstRun[0]!).event).toBe('plan');
+    expect(firstRun[0]!.event).toBe('plan');
     expect(execaMock).not.toHaveBeenCalled();
   });
 });

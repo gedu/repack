@@ -77,3 +77,169 @@ describe('RunnerConsole sink core (5a)', () => {
     expect(stream.output).not.toMatch(/\u001b\[/);
   });
 });
+
+/** Complete ANSI strip incl. 256-color/truecolor — the D5 row-B discipline. */
+const stripAnsi = (value: string) =>
+  value.replace(
+    /[\u001B\u009B][[\]()#;?]*(?:(?:\d{1,4}(?:;\d{0,4})*)?[\dA-PR-TZcf-nq-uy=><~])/g,
+    ''
+  );
+
+const ERASE_ROW_UP = '\x1b[1A\x1b[2K';
+
+class FakeStdin extends EventEmitter {
+  isTTY = true;
+  setRawMode = jest.fn();
+  ref = jest.fn();
+  unref = jest.fn();
+}
+
+describe('RunnerConsole live status block (5b, D5)', () => {
+  let stream: FakeStream;
+  let stdin: FakeStdin;
+
+  beforeEach(() => {
+    jest.useFakeTimers();
+    stream = new FakeStream();
+    stdin = new FakeStdin();
+  });
+
+  afterEach(() => {
+    jest.useRealTimers();
+  });
+
+  const make = () => new RunnerConsole({ stdout: stream, stdin });
+
+  it('paints the owned block once and redraws only with cursorUp+eraseLine', () => {
+    const console0 = make();
+    console0.setStatus(['host  8081  running']);
+    expect(stream.output).toBe('host  8081  running\n');
+
+    console0.setStatus(['host  8081  failed']);
+    // Coalesced window: still no repaint inside ~60 ms.
+    expect(stream.output).toBe('host  8081  running\n');
+    jest.advanceTimersByTime(60);
+    expect(stream.output).toBe(
+      'host  8081  running\n' + ERASE_ROW_UP + 'host  8081  failed\n'
+    );
+    // Forbidden legacy mechanisms (D5 row A): no move-down, no clear-down.
+    expect(stream.output).not.toContain('\x1b[1B');
+    expect(stream.output).not.toContain('\x1b[J');
+  });
+
+  it('erases exactly H rows for an H-row block', () => {
+    const console0 = make();
+    console0.setStatus(['row one', 'row two']);
+    console0.setStatus(['row one!', 'row two!']);
+    jest.advanceTimersByTime(60);
+    expect(stream.output).toBe(
+      'row one\nrow two\n' +
+        ERASE_ROW_UP +
+        ERASE_ROW_UP +
+        'row one!\nrow two!\n'
+    );
+  });
+
+  it('never repaints unchanged content while log lines lift and re-drop the block', () => {
+    const console0 = make();
+    console0.setStatus(['host  running']);
+    const afterPaint = stream.chunks.length;
+    console0.setStatus(['host  running']);
+    jest.advanceTimersByTime(1000);
+    expect(stream.chunks).toHaveLength(afterPaint);
+
+    // A log line while the block is visible: the block is lifted (erased),
+    // the line appended, the block re-dropped below — the invariant is that
+    // the owned block is always the last thing on screen.
+    console0.log('[host] compiled main.js');
+    expect(stream.output).toBe(
+      'host  running\n' +
+        ERASE_ROW_UP +
+        '[host] compiled main.js\n' +
+        'host  running\n'
+    );
+  });
+
+  it('counts 256/truecolor escapes as zero width and clamps visible rows to columns-1', () => {
+    stream.columns = 40;
+    const console0 = make();
+    // 39 visible chars wrapped in 256-color + truecolor escapes: fits, kept verbatim.
+    const fits =
+      '\x1b[38;5;208m' +
+      'x'.repeat(20) +
+      '\x1b[0m' +
+      '\x1b[38;2;10;20;30m' +
+      'y'.repeat(19) +
+      '\x1b[0m';
+    console0.setStatus([fits]);
+    expect(stream.output).toBe(`${fits}\n`);
+
+    stream.chunks = [];
+    const tooLong = 'z'.repeat(100);
+    console0.setStatus([tooLong]);
+    const painted = stream.output.replace(/\n$/, '');
+    expect(stripAnsi(painted).length).toBeLessThanOrEqual(39);
+  });
+
+  it('resize repaints the owned block immediately', () => {
+    const console0 = make();
+    console0.setStatus(['host  running']);
+    const before = stream.chunks.length;
+    stream.columns = 120;
+    stream.emit('resize');
+    expect(stream.chunks.length).toBeGreaterThan(before);
+    expect(stream.chunks[before]).toBe(ERASE_ROW_UP);
+    expect(stream.output.endsWith('host  running\n')).toBe(true);
+  });
+
+  it('raw mode is on only while armed and release is idempotent', () => {
+    const console0 = make();
+    expect(stdin.setRawMode).not.toHaveBeenCalled();
+    console0.armKeymap({ q: () => undefined });
+    expect(stdin.setRawMode).toHaveBeenCalledTimes(1);
+    expect(stdin.setRawMode).toHaveBeenCalledWith(true);
+    console0.release();
+    console0.release();
+    expect(stdin.setRawMode).toHaveBeenCalledTimes(2);
+    expect(stdin.setRawMode).toHaveBeenLastCalledWith(false);
+    // Re-arm then release again: one more restore, no extra calls.
+    const qSpy = jest.fn();
+    console0.armKeymap({ q: qSpy });
+    stdin.setRawMode.mockClear();
+    console0.release();
+    expect(stdin.setRawMode).toHaveBeenCalledTimes(1);
+    expect(stdin.setRawMode).toHaveBeenCalledWith(false);
+  });
+
+  it('keymap handles the mapped keys; every other key triggers nothing', () => {
+    const console0 = make();
+    const q = jest.fn();
+    const d = jest.fn();
+    const ctrlC = jest.fn();
+    const other = jest.fn();
+    console0.armKeymap({ q, d, '\u0003': ctrlC, z: other });
+    stdin.emit('data', Buffer.from('z'));
+    expect(other).toHaveBeenCalledTimes(1);
+    stdin.emit('data', Buffer.from('?'));
+    stdin.emit('data', Buffer.from('\u001b[A'));
+    expect(q).not.toHaveBeenCalled();
+    expect(d).not.toHaveBeenCalled();
+    expect(ctrlC).not.toHaveBeenCalled();
+    stdin.emit('data', Buffer.from('q'));
+    expect(q).toHaveBeenCalledTimes(1);
+    stdin.emit('data', Buffer.from('d'));
+    expect(d).toHaveBeenCalledTimes(1);
+    stdin.emit('data', Buffer.from('\u0003'));
+    expect(ctrlC).toHaveBeenCalledTimes(1);
+  });
+
+  it('pending repaints are dropped on release and never written after', () => {
+    const console0 = make();
+    console0.setStatus(['host  running']);
+    console0.setStatus(['host  failed']);
+    console0.release();
+    stream.chunks = [];
+    jest.advanceTimersByTime(500);
+    expect(stream.output).toBe('');
+  });
+});

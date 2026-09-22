@@ -19,6 +19,7 @@ import {
   renderStatusTable,
   statusToJson,
 } from './federation/statusTable.js';
+import type { SessionResult } from './federation/supervisor.js';
 import { DevSupervisor } from './federation/supervisor.js';
 import { runWizard } from './federation/wizard.js';
 import type { CliConfig, FederationDevArguments } from './types.js';
@@ -66,12 +67,16 @@ function usageError(message: string): void {
   process.exit(2);
 }
 
-function printPlan(plan: PlannedApp[], json: boolean): void {
-  if (json) {
-    console.log(planToJson(plan));
-    return;
-  }
-  for (const row of renderPlanTable(plan)) console.log(row);
+/** `d` on the keymap: poke the host dev server's debugger endpoint. */
+function postOpenDebugger(url: string): void {
+  const request = http.request(
+    `${url}/open-debugger`,
+    { method: 'POST', timeout: 2000 },
+    (response) => response.resume()
+  );
+  request.on('error', () => undefined);
+  request.on('timeout', () => request.destroy());
+  request.end();
 }
 
 /**
@@ -276,9 +281,23 @@ export async function federationDev(
   }
 
   const plan = buildPlan({ ...planBase, ports });
-  printPlan(plan, args.json === true);
+
+  // From here on the sink is the one stdout owner (D5 row H): plan, logs,
+  // status block and JSON contracts all route through it, nothing else
+  // writes stdout while the session is alive.
+  const runnerConsole = new RunnerConsole({
+    stdout: process.stdout,
+    stdin: process.stdin,
+  });
+  // Terminal restore on every exit path. (`exit-hook` is ESM-only and a
+  // CJS build cannot require it; `process.on('exit')` fires for
+  // process.exit() too and the finally below covers the throw paths.)
+  const releaseTerminal = () => runnerConsole.release();
+  process.on('exit', releaseTerminal);
+  runnerConsole.persist(args.json ? [planToJson(plan)] : renderPlanTable(plan));
 
   if (args.dryRun) {
+    runnerConsole.release();
     process.exit(0);
     return;
   }
@@ -288,50 +307,70 @@ export async function federationDev(
   // remote ports are printed guidance only — the runner never executes adb
   // for them (threat row "adb execution").
   const host = plan.find((app) => app.role === 'host')!;
-  const runnerConsole = new RunnerConsole({ stdout: process.stdout });
   const platform = args.platform ?? 'ios';
   await runAdbReverse({ port: host.port as number });
   for (const app of plan) {
     if (app.role === 'remote') {
-      console.log(
+      runnerConsole.log(
         `Remote port: run "adb reverse tcp:${app.port} tcp:${app.port}" on ` +
           'your device to reach it from the app.'
       );
     }
   }
-  console.log(
+  runnerConsole.log(
     `Run your app with: react-native run-${platform} — it reaches the host ` +
       `dev server at ${host.url}`
   );
+  // The keymap disclosure (D5 row F): exactly these keys do something.
+  runnerConsole.persist(['Keys: q quit | d open debugger | Ctrl-C quit']);
 
   const supervisor = new DevSupervisor(plan, runnerConsole, { probeStatus });
   // One Ctrl-C asks for the supervisor's ordered shutdown; the second one
   // escalates inside the supervisor (SIGINT → grace → SIGTERM).
   const onSigint = () => supervisor.shutdown('interrupt');
   process.on('SIGINT', onSigint);
+  runnerConsole.armKeymap({
+    q: onSigint,
+    '\u0003': onSigint,
+    d: () => postOpenDebugger(host.url),
+  });
 
   let lastDoc = '';
+  let lastRowsKey = '';
   const statusWatch = setInterval(() => {
-    if (!args.json) return;
-    const doc = statusToJson(plan, supervisor.getStatuses());
-    if (doc !== lastDoc) {
-      lastDoc = doc;
-      console.log(doc);
+    const statuses = supervisor.getStatuses();
+    if (args.json) {
+      const doc = statusToJson(plan, statuses);
+      if (doc !== lastDoc) {
+        lastDoc = doc;
+        runnerConsole.log(doc);
+      }
+    } else {
+      const rows = renderStatusTable(plan, statuses);
+      const key = rows.join('\n');
+      if (key !== lastRowsKey) {
+        lastRowsKey = key;
+        runnerConsole.setStatus(rows);
+      }
     }
   }, 250);
 
-  const result = await supervisor.run();
-  clearInterval(statusWatch);
-  process.off('SIGINT', onSigint);
+  let result: SessionResult;
+  try {
+    result = await supervisor.run();
+  } finally {
+    clearInterval(statusWatch);
+    process.off('SIGINT', onSigint);
+    process.off('exit', releaseTerminal);
+    runnerConsole.release();
+  }
 
+  // Terminal is back to plain: the final summary is static output.
   const statuses = supervisor.getStatuses();
   if (args.json) {
-    console.log(statusToJson(plan, statuses));
+    runnerConsole.persist([statusToJson(plan, statuses)]);
   } else {
-    const rows = renderStatusTable(plan, statuses);
-    for (const row of rows) console.log(row);
-    runnerConsole.persist(rows);
+    runnerConsole.persist(renderStatusTable(plan, statuses));
   }
-  runnerConsole.release();
   process.exit(result.exitCode);
 }
