@@ -6,8 +6,11 @@ import path from 'node:path';
 import { PassThrough } from 'node:stream';
 import execa from 'execa';
 import packageJson from '../../../package.json';
-import { CLIError } from '../../helpers/index.js';
 import { runAdbReverse } from '../common/runAdbReverse.js';
+import {
+  createRnbinFixtures,
+  type RnbinFixtures,
+} from '../federation/__tests__/helpers/rnbinFixtures.js';
 import * as portPlanner from '../federation/portPlanner.js';
 import * as rnBin from '../federation/rnBin.js';
 import * as wizard from '../federation/wizard.js';
@@ -261,11 +264,56 @@ describe('federation-dev --config <path>', () => {
 });
 
 describe('federation-dev per-app react-native CLI resolution', () => {
+  // The app installs are generated at runtime under os.tmpdir(): a fixture
+  // node_modules/ tree is gitignored by definition, so a committed one
+  // would be missing on CI and resolution would walk up to the repo's
+  // REAL react-native, silently testing the wrong package.
+  let rnFixtures: RnbinFixtures;
+  let workspace: string;
+  // The monorepo root's node_modules — what resolution walks UP to when an
+  // app root has no install. No command may ever reference it.
+  const repoNodeModules = path.resolve(
+    __dirname,
+    '..',
+    '..',
+    '..',
+    '..',
+    'node_modules'
+  );
+
+  const writeWorkspace = (name: string, miniRoot: string) => {
+    const dir = path.join(rnFixtures.root, name);
+    fs.mkdirSync(dir, { recursive: true });
+    fs.writeFileSync(
+      path.join(dir, 'repack-federation.json'),
+      JSON.stringify({
+        host: { manifest: './build/host/ios', root: '../app', port: 8091 },
+        remotes: {
+          MiniApp: {
+            manifest: './build/mini/ios',
+            root: miniRoot,
+            port: 8092,
+          },
+        },
+      })
+    );
+    return dir;
+  };
+
+  beforeAll(() => {
+    rnFixtures = createRnbinFixtures();
+  });
+
+  afterAll(() => {
+    rnFixtures.cleanup();
+  });
+
   it('resolves each app CLI from its own root', async () => {
     // Threat-adjacent semantics: the CLI an app runs with is the one
     // installed in THAT app's root — the host's install never stands in
     // for a remote rooted elsewhere.
-    process.chdir(path.join(FIXTURES, 'config-split-roots'));
+    workspace = writeWorkspace('split-roots', '../pnpmapp');
+    process.chdir(workspace);
     await federationDev([], cliConfig, {
       dryRun: true,
       json: true,
@@ -276,47 +324,60 @@ describe('federation-dev per-app react-native CLI resolution', () => {
     const mini = plan.apps.find(
       (app: { name: string }) => app.name === 'MiniApp'
     );
-    expect(host.command).toContain(
-      path.join('rnbin', 'app', 'node_modules', 'react-native', 'cli.js')
+    const hostCli = path.join(
+      rnFixtures.appRoot,
+      'node_modules',
+      'react-native',
+      'cli.js'
     );
-    expect(mini.command).toContain(path.join('rnbin', 'pnpmapp'));
-    expect(mini.command).not.toContain(
-      path.join('rnbin', 'app', 'node_modules', 'react-native', 'cli.js')
-    );
-    const hostCli = host.command.split(' ')[1];
+    expect(host.command).toContain(hostCli);
+    // The pnpm app's CLI lives inside its own root — reached through the
+    // symlink (realpath under node_modules/.pnpm) or, where symlinks are
+    // unavailable, through a plain node_modules/react-native.
+    const miniCliExpected = rnFixtures.pnpmFallbackDir
+      ? path.join(rnFixtures.pnpmFallbackDir, 'scripts', 'cli.js')
+      : rnFixtures.pnpmCliRealpath;
+    expect(mini.command).toContain(miniCliExpected);
+    expect(mini.command).not.toContain(hostCli);
     const miniCli = mini.command.split(' ')[1];
     expect(miniCli).not.toBe(hostCli);
+    // CI-equivalence: nothing resolved to the repo's own install.
+    expect(host.command).not.toContain(repoNodeModules);
+    expect(mini.command).not.toContain(repoNodeModules);
     expect(execaMock).not.toHaveBeenCalled();
   });
 
   it('exits 2 naming the app whose own root lacks react-native', async () => {
     // No silent fall-back to the host's CLI: an app rooted where no
-    // react-native resolves is a usage error naming that app. jest's own
-    // resolver never truly misses inside the repo tree, so the per-root
-    // failure is driven through rnBin's documented error contract (the
-    // real MODULE_NOT_FOUND mapping is pinned in rnBin.test).
+    // react-native resolves (the bare `noroot` fixture) is a usage error
+    // naming that app. jest's own resolver never truly misses — it falls
+    // back to the repo tree even with paths: [root] — so the miss is
+    // driven through rnBin's documented requireResolve seam with a
+    // Node-shaped MODULE_NOT_FOUND, mapping to the real CLIError. The
+    // host still resolves for real, against its tmp fixture install.
     // realpath: the command anchors paths on process.cwd(), which realpaths
-    // /var to /private/var on macOS — compare the same absolute form.
-    const miniRoot = path.join(fs.realpathSync(tmpDir), 'mini');
+    // /var to /private/var on macOS — rnFixtures.root is already realpath'd.
+    const miniRoot = rnFixtures.noRoot;
+    // Capture the real implementation BEFORE the spy swaps the export:
+    // jest.requireActual hands back the very object spyOn mutates.
+    const realResolve = rnBin.resolveReactNativeBin;
     jest
       .spyOn(rnBin, 'resolveReactNativeBin')
-      .mockImplementation((root: string) => {
+      .mockImplementation((root: string, options?: unknown) => {
         if (root === miniRoot) {
-          throw new CLIError(
-            `Cannot resolve the "react-native" package from ${root}`
-          );
+          return realResolve(root, {
+            requireResolve: () => {
+              throw Object.assign(
+                new Error("Cannot find module 'react-native/package.json'"),
+                { code: 'MODULE_NOT_FOUND' }
+              );
+            },
+          });
         }
-        return '/resolved/react-native/cli.js';
+        return realResolve(root, options as never);
       });
-    fs.mkdirSync(miniRoot);
-    fs.writeFileSync(
-      path.join(tmpDir, 'repack-federation.json'),
-      JSON.stringify({
-        host: { manifest: './build/host', root: '.' },
-        remotes: { MiniApp: { manifest: './build/mini', root: 'mini' } },
-      })
-    );
-    process.chdir(tmpDir);
+    workspace = writeWorkspace('missing-root', '../noroot');
+    process.chdir(workspace);
     await federationDev([], cliConfig, {
       apps: 'MiniApp',
       dryRun: true,
