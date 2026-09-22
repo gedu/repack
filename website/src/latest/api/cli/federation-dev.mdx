@@ -105,6 +105,8 @@ While the session runs, exactly these keys do something (the runner prints this 
 
 Every other key is a deliberate no-op. The terminal (raw mode, cursor state) is always restored, including on crashes. Suspending with Ctrl-Z is not supported in runner mode — suspend from another terminal if you must.
 
+A dead child never ends the session: if any app crashes — the host included — the others keep serving and the runner keeps printing until **you** quit (`q`/Ctrl-C); the final status table marks the dead app `failed` and the session exits 1.
+
 ## adb and run guidance
 
 - The **host** port is reversed automatically through the react-native CLI's audited adb helper, once, for all connected devices.

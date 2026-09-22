@@ -46,7 +46,7 @@ interface TrackedChild {
  */
 export class DevSupervisor {
   private tracked: TrackedChild[] = [];
-  private shutdownReason: 'interrupt' | 'app-exit' | null = null;
+  private shutdownReason: 'interrupt' | null = null;
   private escalated = false;
   private graceTimer?: ReturnType<typeof setTimeout>;
   private sessionFailed = false;
@@ -126,7 +126,7 @@ export class DevSupervisor {
    * (threat row "Signals & terminal state"). `run()` resolves only after
    * every child is gone — never orphaning a dev server.
    */
-  shutdown(reason: 'interrupt' | 'app-exit'): void {
+  shutdown(reason: 'interrupt'): void {
     if (this.shutdownReason === null) {
       this.shutdownReason = reason;
       for (const entry of this.tracked) {

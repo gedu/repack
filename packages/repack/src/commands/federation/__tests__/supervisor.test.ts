@@ -53,7 +53,7 @@ beforeEach(() => {
 afterEach(() => {
   // Park every live session: shutdown + exit so no readiness poller
   // outlives its test (polling stops on child exit).
-  for (const supervisor of supervisors) supervisor.shutdown('app-exit');
+  for (const supervisor of supervisors) supervisor.shutdown('interrupt');
   for (const child of children) child.emit('exit', 0, null);
   jest.useRealTimers();
 });
