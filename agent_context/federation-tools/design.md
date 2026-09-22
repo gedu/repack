@@ -174,6 +174,13 @@ Each PR is shippable alone and lands with docs in the same PR.
   (or shared `shared.config.ts` convention) deriving versions from real
   `package.json`; codemod `repack federation init` that generates/repairs
   host & remote configs from installed versions.
+  - **Command surface correction (as shipped).** No `repack federation init`
+    subcommand tree: the codemod is the flat `react-native federation-init`
+    command, alongside `federation-manifest`/`federation-doctor` in the same
+    `commands` array. And no `shared.config.ts` convention: the committed
+    workspace file is `repack-federation.json` (the host/remotes map for the
+    tools); shared versions are never literals at all — `defineShared`
+    resolves exact pins from the installed packages at build time.
 - **PR 5 — Dev runner (interactive).** `repack federation dev`: light
   `@clack/prompts`-style selection (which remotes, iOS/Android, auto ports),
   then exits interactive mode and streams raw logs in plain scrollable
@@ -257,6 +264,46 @@ Deltas from the design above, all deliberate:
   (exit 1, escapable with `--allow-missing-manifests`); a corrupt one aborts
   with exit 2 — results from an unparseable manifest cannot be trusted, so
   the escape hatch deliberately does not cover it.
+
+## PR 4 implementation notes (as built)
+
+- `defineShared(deps, { context, role, mode })` exported from
+  `@callstack/repack`: exact pins resolve from the installed packages (never
+  committed literals or ranges), `eager` is the role+mode convention — host
+  eager / remote federated-lazy / standalone all-eager — never an identity.
+  `--standalone` reaches configs through `env.argv` only and is never
+  persisted to any file.
+- `repack-federation.json` is the committed workspace map —
+  `{ host: { manifest, root? }, remotes: { name: { manifest, root?,
+  standalone?, port? } } }`, strict schema, unknown keys invalid. It drives
+  zero-flag `federation-doctor`, is the only workspace source for
+  `federation-init` (no `--config` passthrough by design), and gates
+  `--standalone`: a remote entry without `"standalone": true` is refused
+  before compiling. `port` is declared for PR 5, unused today.
+- Doctor extensions: `--dry-run` pre-build mode (package.json + bundler
+  configs + workspace map only, every finding carries the unbuilt caveat),
+  opt-in `--pairwise` (shared-only remote↔remote; native checks stay
+  host↔remote), `EAGER_ADVISORY` warning for the host-eager/remote-lazy
+  convention (only other eager splits remain `EAGER_MISMATCH` errors),
+  host-native-first report ordering, no fail-fast.
+- `federation-init <feature-folder> --name <remote>` scans the folder
+  statically (dynamic imports → explicit non-exhaustive advisories),
+  generates versionless `rspack.<remote>.mts` / `webpack.<remote>.mts`
+  configs on `defineShared`, merges scanned deps ∩ host provides into the
+  remote `package.json` at host versions, anchors the host `remotes`
+  registration and the workspace-map entry — everything planned and diffed
+  before any write, `--yes` pre-approves and auto-aligns divergent pins,
+  re-runs are idempotent ("Nothing to do").
+- RN CLI >= 17 positional contract: a command reading a positional argument
+  must declare it in the command name (`federation-manifest [source]`,
+  `federation-init [feature-folder]`) — otherwise commander passes the
+  parsed options object as `argv[0]`. Command implementations additionally
+  trust only string `argv[0]`. Dry-run config extraction also discovers
+  tooling-style `rspack.<name>.*` configs when unambiguous, so
+  init-scaffolded remotes are checkable without conventional filenames
+  (apps keeping fully custom names, like the tester apps'
+  `config.<app>.mts` pair in one directory, still need `--config`-style
+  flows from the PR 5 runner).
 
 ## Referenced surface (verified 2026-09)
 

@@ -3,6 +3,7 @@
   "code-splitting",
   "module-federation",
   "federation-manifest",
+  "federation-workspace",
   "dev-server",
   "flow-support",
   "devtools",
