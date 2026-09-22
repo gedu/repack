@@ -21,6 +21,22 @@ export interface SessionResult {
   >;
 }
 
+/** A one-shot attached process in the same spawn shape as a planned app. */
+export interface OneShotTarget {
+  file: string;
+  args: string[];
+  cwd: string;
+}
+
+interface OneShotChild {
+  name: string;
+  child: ChildProcessWithoutNullStreams;
+  exited: boolean;
+  /** Set when the supervisor kills it at session end: exit stays silent. */
+  killed: boolean;
+  pending: { out: string; err: string };
+}
+
 const DEFAULT_GRACE_MS = 5000;
 const READINESS_POLL_FIRST_MS = 500;
 const READINESS_POLL_MAX_MS = 2000;
@@ -46,6 +62,7 @@ interface TrackedChild {
  */
 export class DevSupervisor {
   private tracked: TrackedChild[] = [];
+  private oneShots: OneShotChild[] = [];
   private shutdownReason: 'interrupt' | null = null;
   private escalated = false;
   private graceTimer?: ReturnType<typeof setTimeout>;
@@ -56,7 +73,12 @@ export class DevSupervisor {
   constructor(
     private plan: PlannedApp[],
     private out: LogSink,
-    private opts: { graceMs?: number; probeStatus: StatusProbe }
+    private opts: {
+      graceMs?: number;
+      probeStatus: StatusProbe;
+      /** Fires once per app the first time its probe reports running. */
+      onFirstReady?: (appName: string) => void;
+    }
   ) {
     this.allGone = new Promise<void>((resolve) => {
       this.markAllGone = resolve;
@@ -68,6 +90,60 @@ export class DevSupervisor {
     return Object.fromEntries(
       this.tracked.map((entry) => [entry.app.name, entry.status])
     );
+  }
+
+  /**
+   * Attach a one-shot child (the app launch) to the session: spawned with
+   * the same execa discipline as the dev-server children, streamed through
+   * the same prefixed log pane, and killed with the children on shutdown or
+   * session end. It is deliberately NOT tracked: it has no port to watch,
+   * no status row, and its exit code never touches the session result.
+   */
+  spawnOneShot(target: OneShotTarget, name = 'launch'): void {
+    const child = execa(target.file, target.args, {
+      cwd: target.cwd,
+      stdin: 'ignore',
+      stdout: 'pipe',
+      stderr: 'pipe',
+    }) as unknown as ChildProcessWithoutNullStreams;
+    const asPromise = child as unknown as Partial<Promise<unknown>>;
+    if (typeof asPromise.catch === 'function') asPromise.catch(() => undefined);
+    const entry: OneShotChild = {
+      name,
+      child,
+      exited: false,
+      killed: false,
+      pending: { out: '', err: '' },
+    };
+    this.oneShots.push(entry);
+    child.stdout?.on('data', (chunk: Buffer) =>
+      this.streamPrefixed(name, entry.pending, 'out', chunk)
+    );
+    child.stderr?.on('data', (chunk: Buffer) =>
+      this.streamPrefixed(name, entry.pending, 'err', chunk)
+    );
+    child.once('exit', (code, signal) =>
+      this.onOneShotExit(entry, code, signal)
+    );
+  }
+
+  private onOneShotExit(
+    entry: OneShotChild,
+    code: number | null,
+    signal: string | null
+  ): void {
+    if (entry.exited) return;
+    entry.exited = true;
+    this.flushPending(entry.name, entry.pending);
+    // Shutdown/end-of-session kills are the supervisor's own doing: silent.
+    if (this.shutdownReason !== null || entry.killed) return;
+    if (code === 0) {
+      this.out.log(`[${entry.name}] App launched`);
+    } else {
+      this.out.log(
+        `[${entry.name}] exited with code ${code ?? `signal ${signal}`}`
+      );
+    }
   }
 
   /** Spawn every app (host first, remotes in plan order) and live until they are gone. */
@@ -104,6 +180,15 @@ export class DevSupervisor {
     }
 
     await this.allGone;
+    // Session over: a launch still in flight goes with it, silently — its
+    // story already ended with the servers, and a kill-code line after the
+    // final table would read like a crash.
+    for (const one of this.oneShots) {
+      if (!one.exited) {
+        one.killed = true;
+        one.child.kill('SIGTERM');
+      }
+    }
     const apps: SessionResult['apps'] = {};
     for (const entry of this.tracked) {
       const status =
@@ -132,6 +217,9 @@ export class DevSupervisor {
       for (const entry of this.tracked) {
         if (!this.isGone(entry)) entry.child.kill('SIGINT');
       }
+      for (const one of this.oneShots) {
+        if (!one.exited) one.child.kill('SIGINT');
+      }
       this.graceTimer = setTimeout(
         () => this.escalate(),
         this.opts.graceMs ?? DEFAULT_GRACE_MS
@@ -147,6 +235,9 @@ export class DevSupervisor {
     for (const entry of this.tracked) {
       if (!this.isGone(entry)) entry.child.kill('SIGTERM');
     }
+    for (const one of this.oneShots) {
+      if (!one.exited) one.child.kill('SIGTERM');
+    }
   }
 
   private isGone(entry: TrackedChild): boolean {
@@ -154,13 +245,38 @@ export class DevSupervisor {
   }
 
   private onChunk(entry: TrackedChild, stream: 'out' | 'err', chunk: Buffer) {
-    // Line-split on \n across chunks; the content passes through UNALTERED
-    // (ANSI included) — the prefix is the only addition.
-    const text = entry.pending[stream] + chunk.toString();
+    this.streamPrefixed(entry.app.name, entry.pending, stream, chunk);
+  }
+
+  /**
+   * Line-split on \n across chunks; the content passes through UNALTERED
+   * (ANSI included) — the prefix is the only addition. Shared by tracked
+   * apps and one-shot children: one log pane, one discipline.
+   */
+  private streamPrefixed(
+    name: string,
+    pending: { out: string; err: string },
+    stream: 'out' | 'err',
+    chunk: Buffer
+  ): void {
+    const text = pending[stream] + chunk.toString();
     const lines = text.split('\n');
-    entry.pending[stream] = lines.pop() ?? '';
+    pending[stream] = lines.pop() ?? '';
     for (const line of lines) {
-      this.out.log(`[${entry.app.name}] ${line}`);
+      this.out.log(`[${name}] ${line}`);
+    }
+  }
+
+  private flushPending(
+    name: string,
+    pending: { out: string; err: string }
+  ): void {
+    for (const stream of ['out', 'err'] as const) {
+      const rest = pending[stream];
+      if (rest !== '') {
+        pending[stream] = '';
+        this.out.log(`[${name}] ${rest}`);
+      }
     }
   }
 
@@ -173,13 +289,7 @@ export class DevSupervisor {
     entry.exited = true;
     if (entry.pollTimer) clearTimeout(entry.pollTimer);
     entry.exitCode = code;
-    for (const stream of ['out', 'err'] as const) {
-      const rest = entry.pending[stream];
-      if (rest !== '') {
-        entry.pending[stream] = '';
-        this.out.log(`[${entry.app.name}] ${rest}`);
-      }
-    }
+    this.flushPending(entry.app.name, entry.pending);
 
     if (this.shutdownReason !== null) {
       entry.status = 'exited';
@@ -221,6 +331,7 @@ export class DevSupervisor {
       if (this.isGone(entry)) return;
       if (body?.startsWith('packager-status:running')) {
         entry.status = 'running';
+        this.opts.onFirstReady?.(entry.app.name);
         return;
       }
       schedule(Math.min(delay * 2, READINESS_POLL_MAX_MS));

@@ -58,9 +58,15 @@ afterEach(() => {
   jest.useRealTimers();
 });
 
-const makeSupervisor = (opts?: { graceMs?: number }) => {
+const makeSupervisor = (opts?: {
+  graceMs?: number;
+  onFirstReady?: (appName: string) => void;
+}) => {
   const supervisor = new DevSupervisor(plan, sink, {
     ...(opts?.graceMs === undefined ? {} : { graceMs: opts.graceMs }),
+    ...(opts?.onFirstReady === undefined
+      ? {}
+      : { onFirstReady: opts.onFirstReady }),
     probeStatus,
   });
   supervisors.push(supervisor);
@@ -186,5 +192,114 @@ describe('DevSupervisor crash isolation', () => {
     children[1]!.emit('exit', 3, null);
     const result = await run;
     expect(result.exitCode).toBe(1);
+  });
+});
+
+describe('DevSupervisor first-ready callback', () => {
+  it('fires onFirstReady once per app on the first running transition only', async () => {
+    jest.useFakeTimers();
+    probeStatus.mockImplementation(async () => 'packager-status:running');
+    const onFirstReady = jest.fn();
+    const supervisor = makeSupervisor({ onFirstReady });
+    void supervisor.run();
+    await jest.advanceTimersByTimeAsync(1000);
+    expect(onFirstReady.mock.calls.map((call) => call[0]).sort()).toEqual([
+      'MiniApp',
+      'host',
+    ]);
+    // Later polls never re-fire: readiness flips once and stays flipped.
+    await jest.advanceTimersByTimeAsync(5000);
+    expect(onFirstReady).toHaveBeenCalledTimes(2);
+  });
+});
+
+describe('DevSupervisor one-shot attached process', () => {
+  const target = {
+    file: process.execPath,
+    args: ['/rn/cli.js', 'run-android', '--no-packager'],
+    cwd: '/workspace/app',
+  };
+
+  it('spawns through execa with the supervisor discipline and streams [launch]-prefixed lines outside the status table', async () => {
+    const supervisor = makeSupervisor();
+    void supervisor.run();
+    supervisor.spawnOneShot(target);
+    const calls = execaMock.mock.calls as unknown as Array<
+      [string, string[], Record<string, unknown>]
+    >;
+    expect(calls).toHaveLength(3);
+    const launchCall = calls[2]!;
+    expect(launchCall[0]).toBe(process.execPath);
+    expect(launchCall[1]).toEqual(target.args);
+    expect(launchCall[2].cwd).toBe(target.cwd);
+    expect(launchCall[2].stdin).toBe('ignore');
+    expect(launchCall[2].stdout).toBe('pipe');
+    expect(launchCall[2].stderr).toBe('pipe');
+    expect(launchCall[2].shell).toBeFalsy();
+    // Same append-only prefixed log pane, same line-splitting discipline.
+    children[2]!.stdout.write('BUILD SUC');
+    children[2]!.stdout.write('CESS\n');
+    await flush();
+    expect(lines).toContain('[launch] BUILD SUCCESS');
+    // The status table is untouched: no 'launch' row appears.
+    expect(Object.keys(supervisor.getStatuses())).toEqual(['host', 'MiniApp']);
+  });
+
+  it('exit 0 persists App launched and never fails the session', async () => {
+    const supervisor = makeSupervisor();
+    const run = supervisor.run();
+    supervisor.spawnOneShot(target);
+    children[2]!.emit('exit', 0, null);
+    await flush();
+    expect(lines).toContain('[launch] App launched');
+    supervisor.shutdown('interrupt');
+    children[0]!.emit('exit', 0, null);
+    children[1]!.emit('exit', 0, null);
+    const result = await run;
+    expect(result.exitCode).toBe(0);
+  });
+
+  it("nonzero exit persists the code but the session exit code stays the apps'", async () => {
+    const supervisor = makeSupervisor();
+    const run = supervisor.run();
+    supervisor.spawnOneShot(target);
+    children[2]!.emit('exit', 7, null);
+    await flush();
+    expect(lines).toContain('[launch] exited with code 7');
+    // The failed launch is NOT a session failure: the apps still decide.
+    supervisor.shutdown('interrupt');
+    children[0]!.emit('exit', 0, null);
+    children[1]!.emit('exit', 0, null);
+    const result = await run;
+    expect(result.exitCode).toBe(0);
+  });
+
+  it('shutdown SIGINTs a live one-shot with the children and escalation SIGTERMs it', async () => {
+    jest.useFakeTimers();
+    const supervisor = makeSupervisor({ graceMs: 5000 });
+    void supervisor.run();
+    supervisor.spawnOneShot(target);
+    supervisor.shutdown('interrupt');
+    expect(children[2]!.kill).toHaveBeenCalledWith('SIGINT');
+    supervisor.shutdown('interrupt');
+    expect(children[2]!.kill).toHaveBeenCalledWith('SIGTERM');
+    // Shutdown-killed one-shots stay silent: the interrupt, not a crash.
+    children[2]!.emit('exit', null, 'SIGTERM');
+    await jest.advanceTimersByTimeAsync(0);
+    expect(
+      lines.some((line) => line.includes('[launch] exited with code'))
+    ).toBe(false);
+  });
+
+  it('a session ending without shutdown still kills a live one-shot, silently', async () => {
+    const supervisor = makeSupervisor();
+    const run = supervisor.run();
+    supervisor.spawnOneShot(target);
+    // Both apps exit on their own: the session ends while the launch runs.
+    children[0]!.emit('exit', 0, null);
+    children[1]!.emit('exit', 0, null);
+    await run;
+    expect(children[2]!.kill).toHaveBeenCalled();
+    expect(lines.some((line) => line.includes('[launch] exited'))).toBe(false);
   });
 });
