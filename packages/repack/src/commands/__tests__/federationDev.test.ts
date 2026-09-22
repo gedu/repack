@@ -7,6 +7,7 @@ import { PassThrough } from 'node:stream';
 import execa from 'execa';
 import { runAdbReverse } from '../common/runAdbReverse.js';
 import * as portPlanner from '../federation/portPlanner.js';
+import * as wizard from '../federation/wizard.js';
 import { federationDev } from '../federation-dev.js';
 
 jest.mock('execa');
@@ -161,6 +162,57 @@ describe('federation-dev non-TTY defaults', () => {
     expect(text).toContain('host');
     expect(text).toContain('MiniApp');
     expect(execaMock).not.toHaveBeenCalled();
+  });
+});
+
+describe('federation-dev wizard gate', () => {
+  let wizardSpy: jest.SpyInstance;
+  const originalIsTTY = process.stdout.isTTY;
+
+  beforeEach(() => {
+    wizardSpy = jest
+      .spyOn(wizard, 'runWizard')
+      .mockResolvedValue({ status: 'cancelled' } as never);
+  });
+
+  afterEach(() => {
+    process.stdout.isTTY = originalIsTTY;
+  });
+
+  it('never runs the wizard when stdout is not a TTY', async () => {
+    process.stdout.isTTY = false;
+    await federationDev([], cliConfig, { dryRun: true });
+    expect(wizardSpy).not.toHaveBeenCalled();
+  });
+
+  it('runs the wizard on a TTY when neither --apps nor --no-interactive is given', async () => {
+    process.stdout.isTTY = true;
+    wizardSpy.mockResolvedValue({
+      status: 'completed',
+      answers: {
+        session: { remotes: ['MiniApp'] },
+        platform: undefined,
+        ports: { host: 8099 },
+      },
+    });
+    await federationDev([], cliConfig, { dryRun: true });
+    expect(wizardSpy).toHaveBeenCalledTimes(1);
+    // The answers drive the plan: the wizard's host port shows up.
+    expect(output()).toContain('8099');
+  });
+
+  it('a cancelled wizard exits 0 without spawning', async () => {
+    process.stdout.isTTY = true;
+    await federationDev([], cliConfig, { dryRun: true });
+    expect(wizardSpy).toHaveBeenCalledTimes(1);
+    expect(exitSpy).toHaveBeenCalledWith(0);
+    expect(execaMock).not.toHaveBeenCalled();
+  });
+
+  it('--no-interactive suppresses the wizard even on a TTY', async () => {
+    process.stdout.isTTY = true;
+    await federationDev([], cliConfig, { dryRun: true, interactive: false });
+    expect(wizardSpy).not.toHaveBeenCalled();
   });
 });
 

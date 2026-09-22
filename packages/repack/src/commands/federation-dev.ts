@@ -20,6 +20,7 @@ import {
   statusToJson,
 } from './federation/statusTable.js';
 import { DevSupervisor } from './federation/supervisor.js';
+import { runWizard } from './federation/wizard.js';
 import type { CliConfig, FederationDevArguments } from './types.js';
 
 /**
@@ -163,13 +164,6 @@ export async function federationDev(
     }
   }
 
-  // Wizard gate: --apps, --no-interactive or a non-TTY stdout suppress the
-  // interactive wizard; the default session is then host + every remote.
-  const session: PlanInput['session'] = {
-    remotes: requested.length > 0 ? requested : declaredNames,
-    standaloneRemote: args.standalone,
-  };
-
   const configDir = path.dirname(filePath);
   const hostRoot = path.resolve(configDir, config.host.root ?? '.');
   let rnCliPath: string;
@@ -180,26 +174,67 @@ export async function federationDev(
     return;
   }
 
-  const planBase = {
+  // Wizard gate: --apps, --no-interactive or a non-TTY stdout suppress the
+  // interactive wizard; the default session is then host + every remote.
+  const planBase: PlanInput = {
     configPath: filePath,
     config,
-    session,
+    session: {
+      remotes: requested.length > 0 ? requested : declaredNames,
+      standaloneRemote: args.standalone,
+    },
     overrides: {
       port: args.port,
       platform: args.platform === 'android' ? 'android' : args.platform,
     },
+    ports: {},
     rnCliPath,
-  } as const;
+  };
 
   let effective: PlannedApp[];
   try {
-    effective = buildPlan({ ...planBase, ports: {} });
+    effective = buildPlan(planBase);
   } catch (error) {
     if (error instanceof CLIError) {
       usageError(error.message);
       return;
     }
     throw error;
+  }
+
+  // The wizard is an input source only: its answers rewrite the same plan
+  // inputs the flags drive, then everything continues down one path.
+  if (
+    args.apps === undefined &&
+    args.interactive !== false &&
+    process.stdout.isTTY
+  ) {
+    const outcome = await runWizard({ config, planned: effective });
+    if (outcome.status === 'cancelled') {
+      // Cancel is a clean no-op, not a failure (init prompts precedent).
+      process.exit(0);
+      return;
+    }
+    const { answers } = outcome;
+    planBase.session = {
+      remotes:
+        answers.session.remotes.length > 0
+          ? answers.session.remotes
+          : declaredNames,
+      standaloneRemote: answers.session.standaloneRemote ?? args.standalone,
+    };
+    if (answers.platform !== undefined) {
+      planBase.overrides.platform = answers.platform;
+    }
+    try {
+      effective = buildPlan({ ...planBase, ports: answers.ports });
+    } catch (error) {
+      if (error instanceof CLIError) {
+        usageError(error.message);
+        return;
+      }
+      throw error;
+    }
   }
 
   const conflicts: { app: string; port: number }[] = [];
