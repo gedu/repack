@@ -170,6 +170,40 @@ describe('federation-dev usage errors (exit 2, spawn nothing)', () => {
   });
 });
 
+describe('federation-dev dry-run port conflicts (command wiring)', () => {
+  beforeEach(() => {
+    // Twin fixture declares 8081/8082; make MiniApp's declared port busy.
+    jest
+      .spyOn(portPlanner, 'isPortBusy')
+      .mockImplementation(async (port: number) => port === 8082);
+  });
+
+  it('a busy declared port fails the dry run: exit 1, names app+port, spawns nothing', async () => {
+    await federationDev([], cliConfig, { dryRun: true, interactive: false });
+    expect(exitSpy).toHaveBeenCalledWith(1);
+    const text = output();
+    expect(text).toContain('MiniApp');
+    expect(text).toContain('8082');
+    expect(execaMock).not.toHaveBeenCalled();
+  });
+
+  it('--auto-ports rescues the same conflict: plan prints with auto, exit 0', async () => {
+    await federationDev([], cliConfig, {
+      dryRun: true,
+      json: true,
+      autoPorts: true,
+      interactive: false,
+    });
+    expect(exitSpy).toHaveBeenCalledWith(0);
+    const plan = stdoutDocs()[0];
+    const mini = plan.apps.find(
+      (app: { name: string }) => app.name === 'MiniApp'
+    );
+    expect(mini.port).toBeNull(); // `auto` discipline: null in JSON, no spawn
+    expect(execaMock).not.toHaveBeenCalled();
+  });
+});
+
 describe('federation-dev --config <path>', () => {
   it('loads the specific file and anchors the plan on its directory', async () => {
     // cwd sits on the twin fixture on purpose: --config must beat the
