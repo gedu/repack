@@ -1,4 +1,8 @@
-import { bundleCommandOptions, startCommandOptions } from '../options.js';
+import {
+  bundleCommandOptions,
+  federationInitCommandOptions,
+  startCommandOptions,
+} from '../options.js';
 
 describe.each([
   ['start', startCommandOptions],
@@ -30,5 +34,25 @@ describe('--standalone registration', () => {
     // Boolean commander flag: no parse, no default — presence means true.
     expect(standaloneOption).toBeDefined();
     expect(standaloneOption?.parse).toBeUndefined();
+  });
+});
+
+describe('federation-init command options', () => {
+  test('exposes --name, --yes and --standalone', () => {
+    const names = federationInitCommandOptions.map((option) => option.name);
+    expect(names).toContain('--name <remote>');
+    expect(names).toContain('--yes');
+    expect(names).toContain('--standalone');
+  });
+
+  test('--yes and --standalone are boolean flags', () => {
+    for (const name of ['--yes', '--standalone']) {
+      const option = federationInitCommandOptions.find(
+        (candidate) => candidate.name === name
+      ) as { name: string; parse?: unknown } | undefined;
+      // Boolean commander flags: no parse, no default — presence means true.
+      expect(option).toBeDefined();
+      expect(option?.parse).toBeUndefined();
+    }
   });
 });

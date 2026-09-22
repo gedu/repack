@@ -145,6 +145,24 @@ export const federationDoctorCommandOptions = [
   },
 ];
 
+export const federationInitCommandOptions = [
+  {
+    name: '--name <remote>',
+    description:
+      'Name of the remote to scaffold from the given feature folder (used as the federation name and remote key)',
+  },
+  {
+    name: '--yes',
+    description:
+      'Pre-approve all presented diffs and auto-align divergent remote shared pins to the host versions (reporting each pkg: old → new)',
+  },
+  {
+    name: '--standalone',
+    description:
+      'Record standalone support for the scaffolded remote in repack-federation.json. Refused for an existing remote that does not declare it',
+  },
+];
+
 export const bundleCommandOptions = [
   {
     name: '--entry-file <path>',

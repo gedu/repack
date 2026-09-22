@@ -63,6 +63,15 @@ export interface FederationDoctorArguments {
   dryRun?: boolean;
 }
 
+export interface FederationInitArguments {
+  /** Name of the remote to scaffold. */
+  name?: string;
+  /** Pre-approve all diffs and auto-align divergent remote pins to the host. */
+  yes?: boolean;
+  /** Record standalone support for the new remote (refused for unsupported targets). */
+  standalone?: boolean;
+}
+
 export interface CliConfig {
   root: string;
   platforms: string[];

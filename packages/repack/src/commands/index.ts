@@ -1,9 +1,11 @@
 import { bundle } from './bundle.js';
 import { federationDoctor } from './federationDoctor.js';
+import { federationInit } from './federationInit.js';
 import { federationManifest } from './federationManifest.js';
 import {
   bundleCommandOptions,
   federationDoctorCommandOptions,
+  federationInitCommandOptions,
   federationManifestCommandOptions,
   startCommandOptions,
 } from './options.js';
@@ -55,6 +57,13 @@ const federationCommands = [
       'Check host and remote federation manifests for shared and native module drift.',
     options: federationDoctorCommandOptions,
     func: federationDoctor,
+  },
+  {
+    name: 'federation-init',
+    description:
+      'Scaffold a new federation remote from a feature folder: scanned deps, versionless defineShared configs and workspace registration, all diffed before any write.',
+    options: federationInitCommandOptions,
+    func: federationInit,
   },
 ] as const;
 

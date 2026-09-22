@@ -21,6 +21,11 @@
   },
   {
     "type": "file",
+    "name": "federation-init",
+    "label": "Federation init"
+  },
+  {
+    "type": "file",
     "name": "repack-federation-json",
     "label": "repack-federation.json"
   },
