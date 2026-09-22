@@ -1,6 +1,6 @@
 # repack-federation.json
 
-`repack-federation.json` is the per-repo federation workspace map. It tells Re.Pack tooling where the host and each remote live, which remotes support standalone mode, and (reserved for a later release) which dev-server port each remote uses. Its presence is what unlocks **zero-flag operation** of `federation-doctor` (and, once shipped, `federation-init`).
+`repack-federation.json` is the per-repo federation workspace map. It tells Re.Pack tooling where the host and each remote live, which remotes support standalone mode, which bundler config each app runs, and which dev-server port each app uses. Its presence is what unlocks **zero-flag operation** of [`federation-doctor`](/api/cli/federation-doctor), [`federation-init`](/api/cli/federation-init) and the dev runner [`federation-dev`](/api/cli/federation-dev).
 
 ## Schema
 
@@ -8,14 +8,17 @@
 {
   "host": {
     "manifest": "./shell/build",
-    "root": "."
+    "root": ".",
+    "config": "config.host-app.mts",
+    "port": 8081
   },
   "remotes": {
     "store": {
       "manifest": "http://localhost:8082",
       "root": "./apps/store",
       "standalone": true,
-      "port": 8082
+      "port": 8082,
+      "config": "config.store.mts"
     }
   }
 }
@@ -25,13 +28,20 @@
 | --- | --- | --- | --- |
 | `host.manifest` | string | yes | Host manifest source: a `.json` file, a build output directory containing `repack-federation-manifest.json`, or an `http(s)` URL |
 | `host.root` | string | no | Host app root |
+| `host.config` | string | no | Bundler config for the host dev server, resolved against this file's directory; consumed by `federation-dev` |
+| `host.port` | number | no | Host dev-server port (default `8081`); consumed by `federation-dev` |
 | `remotes.<name>` | object | — | One entry per remote, keyed by its declared name (used to label findings) |
 | `remotes.<name>.manifest` | string | yes | Remote manifest source (same shapes as `host.manifest`) |
 | `remotes.<name>.root` | string | no | Remote app root |
 | `remotes.<name>.standalone` | boolean | no | Whether the remote supports `--standalone`; absence means unsupported and commands refuse `--standalone` for it |
-| `remotes.<name>.port` | number | no | Dev-server port; validated and preserved for the future dev-runner, no shipped tool acts on it today |
+| `remotes.<name>.port` | number | no | Dev-server port; `federation-dev` fails with a conflict when a declared port is busy (escape hatch: `--auto-ports`) |
+| `remotes.<name>.config` | string | no | Bundler config for this remote's dev server, resolved against this file's directory; consumed by `federation-dev` |
 
-Relative `manifest` and `root` values resolve against the directory containing `repack-federation.json`, not the caller's working directory. The schema is strict: any field outside this shape is a validation error naming the offending field path.
+Relative `manifest`, `root` and `config` values resolve against the directory containing `repack-federation.json`, not the caller's working directory. The schema is strict: any field outside this shape is a validation error naming the offending field path.
+
+:::caution Forward incompatibility
+Strictness cuts both ways: `config` and `host.port` are new keys, and older Re.Pack tooling **rejects** a file that contains them instead of ignoring them. Bump the Re.Pack version across a workspace before adding these fields, or every tool pinned to the older version fails with exit code 2 on the same file.
+:::
 
 ## Discovery
 

@@ -16,6 +16,11 @@
   },
   {
     "type": "file",
+    "name": "federation-dev",
+    "label": "Federation dev"
+  },
+  {
+    "type": "file",
     "name": "federation-doctor",
     "label": "Federation doctor"
   },
