@@ -50,17 +50,65 @@ describe('validateFederationConfig', () => {
   it('accepts the full document with every optional field', () => {
     expect(
       validateFederationConfig({
-        host: { manifest: './shell/build', root: '.' },
+        host: {
+          manifest: './shell/build',
+          root: '.',
+          config: 'config.host-app.mts',
+          port: 8081,
+        },
         remotes: {
           store: {
             manifest: './store/build',
             root: './apps/store',
+            config: 'config.store.mts',
             standalone: true,
             port: 8082,
           },
         },
       })
     ).toEqual([]);
+  });
+
+  it('accepts per-app config fields on the host and on remotes', () => {
+    // Delta spec "Valid document with config fields": both values must
+    // validate and survive for consumers (preservation pinned in load tests).
+    expect(
+      validateFederationConfig({
+        host: {
+          manifest: './build/host-app/ios',
+          config: 'config.host-app.mts',
+        },
+        remotes: {
+          MiniApp: {
+            manifest: './build/mini-app/ios',
+            config: 'config.mini-app.mts',
+          },
+        },
+      })
+    ).toEqual([]);
+  });
+
+  it('still rejects wrong-typed or unknown config-adjacent fields', () => {
+    // Delta spec "Wrong-typed or unknown fields still invalid": the additive
+    // fields must not soften strictness — each reason names its field path.
+    expect(
+      validateFederationConfig({
+        host: { manifest: '.', config: 42 },
+        remotes: {},
+      })
+    ).toEqual(['host.config must be a string']);
+    expect(
+      validateFederationConfig({
+        host: { manifest: '.', bundleConfig: 'config.x.mts' },
+        remotes: {},
+      })
+    ).toEqual(['host.bundleConfig is not a known field']);
+    expect(
+      validateFederationConfig({
+        host: { manifest: '.', port: 'x' },
+        remotes: {},
+      })
+    ).toEqual(['host.port must be a number']);
   });
 
   it('rejects an unknown top-level key naming its path', () => {
@@ -163,6 +211,37 @@ describe('loadFederationConfig', () => {
       root: './apps/store',
       standalone: true,
       port: 8082,
+    });
+  });
+
+  it('preserves declared config and host port fields for consumers', () => {
+    const dir = path.join(tmpDir, 'config-fields');
+    fs.mkdirSync(dir);
+    fs.writeFileSync(
+      path.join(dir, FEDERATION_CONFIG_FILENAME),
+      JSON.stringify({
+        host: {
+          manifest: './build/host-app/ios',
+          config: 'config.host-app.mts',
+          port: 8081,
+        },
+        remotes: {
+          MiniApp: {
+            manifest: './build/mini-app/ios',
+            config: 'config.mini-app.mts',
+          },
+        },
+      })
+    );
+    const loaded = loadFederationConfig({ cwd: dir });
+    expect(loaded!.config.host).toEqual({
+      manifest: './build/host-app/ios',
+      config: 'config.host-app.mts',
+      port: 8081,
+    });
+    expect(loaded!.config.remotes.MiniApp).toEqual({
+      manifest: './build/mini-app/ios',
+      config: 'config.mini-app.mts',
     });
   });
 
@@ -270,6 +349,21 @@ describe('resolveFederationWorkspace', () => {
   it('keeps http(s) manifest sources verbatim instead of path-resolving them', () => {
     const ws = resolveFederationWorkspace(URL_DIR, {});
     expect(ws.remotes[0]!.source).toBe('http://localhost:8082');
+  });
+
+  it('resolves declared config against the config file directory, not caller cwd', () => {
+    // Delta spec "Config path resolves against the config file's directory":
+    // invoked from a deep nested cwd, the config paths still anchor at the
+    // file's own directory, absolute.
+    const twinDir = path.join(FIXTURES, 'config-dev-twin');
+    const ws = resolveFederationWorkspace(
+      path.join(twinDir, 'deep', 'nested', 'cwd'),
+      {}
+    );
+    expect(ws.host!.config).toBe(path.join(twinDir, 'config.host-app.mts'));
+    expect(ws.remotes[0]!.config).toBe(
+      path.join(twinDir, 'config.mini-app.mts')
+    );
   });
 
   it('applies per-value precedence: --host overrides only the host', () => {

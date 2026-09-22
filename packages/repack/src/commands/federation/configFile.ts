@@ -11,6 +11,13 @@ export interface FederationHostConfig {
   manifest: string;
   /** App root, for consumers that need it (init, dry-run). */
   root?: string;
+  /**
+   * Path to this app's bundler config, resolved against the config-file
+   * directory. Absent ⇒ consumers fall back to the app's own discovery.
+   */
+  config?: string;
+  /** Dev-server port. Consumed by `federation-dev` as the host port default. */
+  port?: number;
 }
 
 /** One named entry of the `remotes` map. */
@@ -19,8 +26,10 @@ export interface FederationRemoteConfig {
   root?: string;
   /** Whether this remote supports `--standalone` mode. */
   standalone?: boolean;
-  /** Dev-server port. Declared for the later runner/wizard PR; unused today. */
+  /** Dev-server port. Consumed by `federation-dev` as the declared port. */
   port?: number;
+  /** Per-app bundler config path, same semantics as `host.config`. */
+  config?: string;
 }
 
 export interface FederationConfig {
@@ -93,8 +102,9 @@ function checkFields(
 
 /**
  * Validate an unknown JSON document against the `repack-federation.json`
- * schema: `{ host: { manifest, root? }, remotes: { name: { manifest, root?,
- * standalone?, port? } } }`, strictly — unknown keys anywhere are invalid.
+ * schema: `{ host: { manifest, root?, config?, port? }, remotes: { name:
+ * { manifest, root?, standalone?, port?, config? } } }`, strictly — unknown
+ * keys anywhere are invalid.
  * Returns the reasons the document is invalid (empty when valid); every
  * reason names the offending field path.
  */
@@ -120,7 +130,12 @@ export function validateFederationConfig(document: unknown): string[] {
   } else {
     checkFields(
       host,
-      { manifest: requireString, root: optionalString },
+      {
+        manifest: requireString,
+        root: optionalString,
+        config: optionalString,
+        port: optionalNumber,
+      },
       'host',
       reasons
     );
@@ -151,6 +166,7 @@ export function validateFederationConfig(document: unknown): string[] {
           root: optionalString,
           standalone: optionalBoolean,
           port: optionalNumber,
+          config: optionalString,
         },
         where,
         reasons
@@ -244,6 +260,8 @@ export function loadFederationConfig(options: { cwd?: string } = {}): {
 export interface ResolvedEntry {
   source: string;
   root?: string;
+  /** Declared bundler config, absolute against the config-file directory. */
+  config?: string;
 }
 
 export interface ResolvedRemote {
@@ -253,6 +271,8 @@ export interface ResolvedRemote {
   root?: string;
   standalone?: boolean;
   port?: number;
+  /** Declared bundler config, absolute against the config-file directory. */
+  config?: string;
 }
 
 export interface ResolvedWorkspace {
@@ -320,10 +340,13 @@ export function resolveFederationWorkspace(
   if (flags.host !== undefined) {
     workspace.host = { source: flags.host };
   } else if (loaded) {
-    const { manifest, root } = loaded.config.host;
+    const { manifest, root, config } = loaded.config.host;
     workspace.host = {
       source: resolveSource(manifest, configDir),
       ...(root === undefined ? {} : { root: path.resolve(configDir, root) }),
+      ...(config === undefined
+        ? {}
+        : { config: path.resolve(configDir, config) }),
     };
   }
 
@@ -341,6 +364,9 @@ export function resolveFederationWorkspace(
           ? {}
           : { standalone: entry.standalone }),
         ...(entry.port === undefined ? {} : { port: entry.port }),
+        ...(entry.config === undefined
+          ? {}
+          : { config: path.resolve(configDir, entry.config) }),
       })
     );
   }
