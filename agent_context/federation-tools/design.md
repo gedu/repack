@@ -337,6 +337,28 @@ Deltas from the design above, all deliberate:
 - Drive-by shipped in `packages/dev-server`: `normalizeOptions` built
   `url` from the raw `options.port`, leaking `undefined` into every URL
   (and proxy targets) when `port` was omitted. Own commit, reverts alone.
+- **Wizard chrome: clack ceiling + TUI guidance (for future terminal UIs).**
+  `@clack/prompts@0.9.1` was verified to have NO prompt-level hint option
+  (`hint` exists only per-option; `confirm`/`text` have none) and renders
+  `message` strictly ABOVE the options list. A first attempt to add key
+  legends by embedding them in the message therefore landed mid-flow —
+  confusing — and was reverted (`a11f6f9e`); the wizard ships as plain
+  clack. Rules learned, to reuse when a richer TUI is worth its cost:
+  (1) keep chrome text out of `message`; legends belong under the options
+  or under the banner, never between title and choices; (2) clack's
+  dim-gray palette clashes with the runner's gradient banner — a custom
+  prompt kit (frame `║`, `▸` cursor, bottom legend, repack purple/teal
+  accents) built on the `runnerConsole` ownership primitives (bounded
+  cursor redraw, resize, raw-mode lifecycle) is the upgrade path AND would
+  drop `@clack/prompts` from repack's runtime deps (only `packages/init`
+  would keep it), removing the maintainer-sign-off item; (3) the
+  long-session ergonomics contract still applies to any prompt: static
+  rows after commit, one owned redraw region, plain fallback off-TTY;
+  (4) legends must describe the exact keymap rendered (D5 row F).
+- Banner (`devHeader.ts`) shares one art/palette source with `logo.ts`;
+  human mode prints the ASCII gradient + version line, CI/NO_COLOR prints
+  one plain line, `--json` prints nothing (JSON stdout purity is pinned
+  by a command test).
 
 ## Referenced surface (verified 2026-09)
 
