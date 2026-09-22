@@ -397,3 +397,5 @@ packages/**/docs
 !packages/repack/src/commands/federation/__fixtures__/dry-run-workspace/apps/host/node_modules/
 !packages/repack/src/commands/federation/__fixtures__/dry-run-workspace/apps/remote-clean/node_modules/
 !packages/repack/src/commands/federation/__fixtures__/dry-run-workspace/apps/remote-drift/node_modules/
+!packages/repack/src/commands/federation/__fixtures__/init-workspace/apps/host/node_modules/
+!packages/repack/src/commands/federation/__fixtures__/init-workspace/apps/remote-drift/node_modules/
