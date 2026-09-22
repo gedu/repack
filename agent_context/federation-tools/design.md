@@ -384,6 +384,10 @@ Deltas from the design above, all deliberate:
   removed; docs state the shipped behavior — a dead child (host
   included) never ends the session; the user quits explicitly.
 
+### App auto-launch (post-PR addition)
+
+- **Readiness-gated one-shot launch**: on an explicit choice (`--launch`, or the wizard's confirm — single platform only, flags and wizard converging on `PlanInput.overrides.launch`), the supervisor spawns `run-<platform> --no-packager [--device <id>]` from the target app's root — the standalone remote's in a standalone session, the host's otherwise — the FIRST time that app's `/status` answers, streams it as `[launch]` through the same log pane, and kills it with the children on shutdown or session end. It is a first-class `spawnOneShot` on `DevSupervisor` but deliberately outside the tracked set: no status row, no respawn on later readiness flips, and it can never affect the session exit codes. `--no-packager` always: the session's dev servers ARE the packager — a second one would race for the port and serve outside the session.
+
 ## Referenced surface (verified 2026-09)
 
 - `packages/repack/src/plugins/ModuleFederationPluginV1.ts` / `V2.ts` — no

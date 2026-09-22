@@ -17,7 +17,7 @@ import { PackageManagerTabs } from '@theme';
   bun: 'bun react-native federation-dev',
 }} />
 
-Run it from anywhere inside the workspace — the nearest `repack-federation.json` up the directory tree is the one used, and all app roots, configs and ports are resolved against that file's directory.
+Run it from anywhere inside the workspace — the nearest `repack-federation.json` up the directory tree is the one used, and all app roots, configs and ports are resolved against that file's directory. On your terminal the flow is: pick remotes and platform (or accept the defaults), say whether to launch the app once the host is ready — then the session starts, and with launch on, the app builds and opens on your device by itself. See [Launching the app](#launching-the-app).
 
 ## What it runs
 
@@ -39,8 +39,9 @@ On a TTY, with neither `--apps` nor `--no-interactive` given, `federation-dev` o
 
 1. **Remotes** — multi-select which declared remotes to run (all selected by default; the host always runs).
 2. **Platform** — `ios`, `android` or *all*.
-3. **Ports** — confirms each app's planned port; answering *no* asks for a replacement.
-4. **Standalone** — offered **only** for selected remotes that declare `"standalone": true`; at most one remote runs standalone.
+3. **Launch** — asked **only** when a single platform was picked: *Launch the app on ios when the host is ready?* (default yes). With *all*, launching is off the table and the wizard says why instead. An explicit `--launch` / `--no-launch` is already an answer and is never re-asked.
+4. **Ports** — confirms each app's planned port; answering *no* asks for a replacement.
+5. **Standalone** — offered **only** for selected remotes that declare `"standalone": true`; at most one remote runs standalone.
 
 The wizard is an input source only: its answers feed the exact same plan resolution the flags drive, so a wizard run and the equivalent flag run produce identical plans. Cancelling exits 0 without spawning anything.
 
@@ -71,6 +72,14 @@ Reassign busy ports to OS-assigned free ones instead of failing with a conflict.
 ### `--standalone <remote>`
 
 Launches that remote with `--standalone`. Refused (exit 2) unless the remote declares `"standalone": true` in `repack-federation.json` — the file is the single source of standalone capability.
+
+### `--launch` / `--no-launch`
+
+Explicit control over starting the app on the device once the session is ready (see [Launching the app](#launching-the-app)). `--launch` requires a narrowed platform — the flag's or the wizard's — and exits 2 without one. Without a TTY (or with `--no-interactive`) the default is **no launch**, keeping CI semantics unchanged; on a TTY with neither flag, the wizard asks whenever a single platform was picked.
+
+### `--device <id>`
+
+Device or simulator id forwarded verbatim to `run-<platform>` (only meaningful with `--launch`). Device selection is delegated to the React Native CLI: an unknown or ambiguous id surfaces that CLI's own error, verbatim, in the `[launch]` log stream.
 
 ### `--no-interactive`
 
@@ -110,6 +119,32 @@ Every other key is a deliberate no-op. The terminal (raw mode, cursor state) is 
 
 A dead child never ends the session: if any app crashes — the host included — the others keep serving and the runner keeps printing until **you** quit (`q`/Ctrl-C); the final status table marks the dead app `failed` and the session exits 1.
 
+## Launching the app
+
+Serving the workspace is only half of `run-ios`/`run-android`. On an explicit choice, `federation-dev` also puts the app on your device once the session is serving: the first time the app's dev server answers readiness (the **host** — or the **standalone remote**, in a standalone session), the runner spawns a one-shot child from that app's project root, with that app's own `react-native` CLI:
+
+```bash
+react-native run-ios --no-packager [--device <id>]   # or run-android
+```
+
+- `--no-packager` is always passed: the session's dev servers **are** the packager. A second one started by the RN CLI would race for the port and serve bundles outside your federation session.
+- All build output (gradle / xcodebuild / install / launch) streams into the same log pane, prefixed `[launch]`. An unknown or ambiguous `--device` id relays the RN CLI's own error verbatim in that stream.
+- The launch is one-shot: it spawns **once** per session, never respawns on later readiness flips, and if you quit before it finishes it is killed with the dev-server children (second-Ctrl-C escalation included).
+- The launch child **never** affects session exit codes. A failed build prints `[launch] exited with code N` (the real error is in the streamed lines above it) while the servers keep serving; the session still ends on the apps' own health, when you quit.
+- The manual run-guidance line still prints, so launching yourself remains possible with the flags off.
+
+How the launch decision is made — one value, flags and wizard feeding the same field:
+
+| Situation | Result |
+| --- | --- |
+| `--launch` + a single platform (flag or wizard) | launch on first readiness |
+| `--no-launch` | never launch |
+| TTY, neither flag, wizard picks `ios`/`android` | wizard asks (default yes) |
+| TTY, neither flag, wizard picks *all* | no launch — the wizard says why |
+| No TTY / `--no-interactive` / `--apps` given | no launch (CI default unchanged) |
+
+`--launch` without a narrowed platform exits 2 — there is no `run-all`.
+
 ## adb and run guidance
 
 - The **host** port is reversed automatically through the react-native CLI's audited adb helper, once, for all connected devices.
@@ -122,7 +157,7 @@ A dead child never ends the session: if any app crashes — the host included �
 | --- | --- |
 | 0 | Success — or a cancelled wizard, or a completed dry run |
 | 1 | Port conflict (no `--auto-ports`), or a child failed/crashed during the session |
-| 2 | Usage or config error — unknown app, bad `--platform`/`--port`, missing or invalid `repack-federation.json`, refused `--standalone`. Nothing is spawned |
+| 2 | Usage or config error — unknown app, bad `--platform`/`--port`, `--launch` without a single platform, missing or invalid `repack-federation.json`, refused `--standalone`. Nothing is spawned |
 
 ## CI examples
 
@@ -134,6 +169,7 @@ react-native federation-dev --dry-run --no-interactive
 react-native federation-dev --dry-run --json --no-interactive
 
 # headless session: MiniApp only, custom host port, never prompts
+# (no device launch — launching is off by default without a TTY)
 react-native federation-dev --apps MiniApp --platform ios --port 8090 --no-interactive
 
 # a busy 8081 on shared runners should not fail the job
