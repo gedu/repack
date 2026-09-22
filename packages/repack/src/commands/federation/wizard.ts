@@ -7,6 +7,12 @@ export interface WizardAnswers {
   session: { remotes: string[]; standaloneRemote?: string };
   /** Absent means "all": no per-platform spawn arg or guidance. */
   platform?: 'ios' | 'android';
+  /**
+   * Launch the app when the host is ready. Absent when launch was never on
+   * the table (platform "all" without an explicit flag) — the one launch
+   * decision is made here and consumed downstream, never re-derived.
+   */
+  launch?: boolean;
   /** Per-app port as confirmed or overridden, keyed by app name. */
   ports: Record<string, number>;
 }
@@ -61,10 +67,22 @@ const validatePort = (value: string): string | undefined => {
   return undefined;
 };
 
+/**
+ * Platform "all" takes the launch question off the table — the app can only
+ * be launched at one platform — but never off the record: the skip is said
+ * out loud where the user can still act on it.
+ */
+const LAUNCH_NEEDS_PLATFORM_LINE =
+  'Launch skipped: launching the app needs a single platform (ios or android).';
+
+const launchMessage = (platform: 'ios' | 'android') =>
+  `Launch the app on ${platform} when the host is ready?`;
+
 async function runClackWizard(
   clack: ClackLike,
   config: FederationConfig,
-  planned: PlannedApp[]
+  planned: PlannedApp[],
+  streams: { launch?: boolean; output: NodeJS.WritableStream }
 ): Promise<WizardOutcome> {
   const cancelled: WizardOutcome = { status: 'cancelled' };
   const declaredRemotes = Object.keys(config.remotes);
@@ -98,6 +116,26 @@ async function runClackWizard(
     platformAnswer === 'ios' || platformAnswer === 'android'
       ? platformAnswer
       : undefined;
+
+  // Launch question sits right after the platform step: it only exists for
+  // a narrowed platform, and an explicit --launch/--no-launch is already
+  // an answer — the wizard never re-asks what the flags decided.
+  let launch: boolean | undefined = streams.launch;
+  if (launch === undefined) {
+    if (platform !== undefined) {
+      const launchAnswer = await clack.confirm({
+        message: launchMessage(platform),
+        initialValue: true,
+      });
+      if (clack.isCancel(launchAnswer)) {
+        clack.cancel('Session cancelled.');
+        return cancelled;
+      }
+      launch = launchAnswer === true;
+    } else {
+      streams.output.write(`${LAUNCH_NEEDS_PLATFORM_LINE}\n`);
+    }
+  }
 
   const ports: Record<string, number> = {};
   for (const app of planned) {
@@ -149,6 +187,7 @@ async function runClackWizard(
     answers: {
       session: standaloneRemote ? { remotes, standaloneRemote } : { remotes },
       platform,
+      ...(launch === undefined ? {} : { launch }),
       ports,
     },
   };
@@ -207,12 +246,17 @@ function createLineReader(
 async function runReadlineWizard(
   config: FederationConfig,
   planned: PlannedApp[],
-  streams: { input?: NodeJS.ReadableStream; output?: NodeJS.WritableStream }
+  streams: {
+    input?: NodeJS.ReadableStream;
+    output?: NodeJS.WritableStream;
+    launch?: boolean;
+  }
 ): Promise<WizardOutcome> {
   const rl = createLineReader(
     streams.input ?? process.stdin,
     streams.output ?? process.stdout
   );
+  const out = streams.output ?? process.stdout;
   const cancelled: WizardOutcome = { status: 'cancelled' };
   try {
     const declaredRemotes = Object.keys(config.remotes);
@@ -231,6 +275,18 @@ async function runReadlineWizard(
       platformAnswer === 'ios' || platformAnswer === 'android'
         ? platformAnswer
         : undefined;
+
+    let launch: boolean | undefined = streams.launch;
+    if (launch === undefined) {
+      if (platform !== undefined) {
+        const answer = (await rl.question(`${launchMessage(platform)} (Y/n): `))
+          .trim()
+          .toLowerCase();
+        launch = !(answer === 'n' || answer === 'no');
+      } else {
+        out.write(`${LAUNCH_NEEDS_PLATFORM_LINE}\n`);
+      }
+    }
 
     const ports: Record<string, number> = {};
     for (const app of planned) {
@@ -269,6 +325,7 @@ async function runReadlineWizard(
       answers: {
         session: standaloneRemote ? { remotes, standaloneRemote } : { remotes },
         platform,
+        ...(launch === undefined ? {} : { launch }),
         ports,
       },
     };
@@ -292,6 +349,8 @@ export async function runWizard(input: {
   config: FederationConfig;
   /** First-pass plan: its per-app ports are the wizard's defaults. */
   planned: PlannedApp[];
+  /** An explicit --launch/--no-launch answer: passed through, never re-asked. */
+  launch?: boolean;
   loadClack?: () => Promise<ClackLike>;
   input?: NodeJS.ReadableStream;
   output?: NodeJS.WritableStream;
@@ -303,6 +362,9 @@ export async function runWizard(input: {
     clack = null;
   }
   return clack
-    ? runClackWizard(clack, input.config, input.planned)
+    ? runClackWizard(clack, input.config, input.planned, {
+        ...(input.launch === undefined ? {} : { launch: input.launch }),
+        output: input.output ?? process.stdout,
+      })
     : runReadlineWizard(input.config, input.planned, input);
 }

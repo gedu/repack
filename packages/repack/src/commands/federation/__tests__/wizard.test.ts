@@ -47,15 +47,24 @@ const planned = [
 
 const runWith = async (
   clack: ClackStub,
-  overrides: { config?: FederationConfig; planned?: PlannedApp[] } = {}
-): Promise<WizardOutcome> =>
-  runWizard({
+  overrides: {
+    config?: FederationConfig;
+    planned?: PlannedApp[];
+    launch?: boolean;
+    onOutput?: (chunk: string) => void;
+  } = {}
+): Promise<WizardOutcome> => {
+  const output = new PassThrough();
+  output.on('data', (chunk) => overrides.onOutput?.(String(chunk)));
+  return runWizard({
     config: overrides.config ?? config,
     planned: overrides.planned ?? planned,
+    ...(overrides.launch === undefined ? {} : { launch: overrides.launch }),
     loadClack: async () => clack as never,
     input: new PassThrough(),
-    output: new PassThrough(),
+    output,
   });
+};
 
 describe('runWizard (clack path)', () => {
   let clack: ClackStub;
@@ -68,6 +77,7 @@ describe('runWizard (clack path)', () => {
     clack.multiselect.mockResolvedValue(['MiniApp']);
     clack.select.mockResolvedValue('ios');
     clack.confirm
+      .mockResolvedValueOnce(true) // launch: yes
       .mockResolvedValueOnce(true) // host port
       .mockResolvedValueOnce(true) // MiniApp port
       .mockResolvedValueOnce(false); // standalone: no
@@ -77,6 +87,7 @@ describe('runWizard (clack path)', () => {
       answers: {
         session: { remotes: ['MiniApp'] },
         platform: 'ios',
+        launch: true,
         ports: { host: 8081, MiniApp: 8082 },
       },
     });
@@ -98,10 +109,54 @@ describe('runWizard (clack path)', () => {
     ).toEqual(['host', 'MiniApp']);
   });
 
+  it('confirms launch right after the platform step, defaulting to yes', async () => {
+    clack.multiselect.mockResolvedValue(['MiniApp']);
+    clack.select.mockResolvedValue('ios');
+    clack.confirm.mockResolvedValue(true);
+    await runWith(clack);
+    // The FIRST confirm is the launch question — it precedes the port loop.
+    const first = clack.confirm.mock.calls[0] as unknown as [
+      { message: string; initialValue?: boolean },
+    ];
+    expect(first[0].message).toContain('Launch the app on ios');
+    expect(first[0].initialValue).toBe(true);
+    const messages = clack.confirm.mock.calls.map(
+      (call) => (call as unknown as [{ message: string }])[0].message
+    );
+    expect(messages[1]).toContain('port');
+  });
+
+  it('launch answer "no" records launch false', async () => {
+    clack.multiselect.mockResolvedValue(['MiniApp']);
+    clack.select.mockResolvedValue('ios');
+    clack.confirm
+      .mockResolvedValueOnce(false) // launch: no
+      .mockResolvedValue(true); // ports + standalone: defaults
+    const outcome = await runWith(clack);
+    expect(outcome.status === 'completed' && outcome.answers.launch).toBe(
+      false
+    );
+  });
+
+  it('an explicit launch answer from the flags is not asked again', async () => {
+    clack.multiselect.mockResolvedValue(['MiniApp']);
+    clack.select.mockResolvedValue('ios');
+    clack.confirm.mockResolvedValue(true); // ports + standalone only
+    const outcome = await runWith(clack, { launch: false });
+    const messages = clack.confirm.mock.calls.map(
+      (call) => (call as unknown as [{ message: string }])[0].message
+    );
+    expect(messages.some((message) => message.includes('Launch'))).toBe(false);
+    expect(outcome.status === 'completed' && outcome.answers.launch).toBe(
+      false
+    );
+  });
+
   it('port override: confirm "no" then text answer wins', async () => {
     clack.multiselect.mockResolvedValue(['MiniApp']);
     clack.select.mockResolvedValue('ios');
     clack.confirm
+      .mockResolvedValueOnce(true) // launch: yes
       .mockResolvedValueOnce(false) // host port: override
       .mockResolvedValueOnce(true) // MiniApp port
       .mockResolvedValueOnce(false); // standalone
@@ -117,9 +172,27 @@ describe('runWizard (clack path)', () => {
     clack.multiselect.mockResolvedValue(['MiniApp']);
     clack.select.mockResolvedValue('all');
     clack.confirm.mockResolvedValue(true); // all port confirms
-    const outcome = await runWith(clack);
+    let captured = '';
+    const outcome = await runWith(clack, { onOutput: (c) => (captured += c) });
     expect(outcome.status === 'completed' && outcome.answers.platform).toBe(
       undefined
+    );
+  });
+
+  it('platform "all" skips the launch question and explains why', async () => {
+    clack.multiselect.mockResolvedValue(['MiniApp']);
+    clack.select.mockResolvedValue('all');
+    clack.confirm.mockResolvedValue(true); // ports + standalone only
+    let captured = '';
+    const outcome = await runWith(clack, { onOutput: (c) => (captured += c) });
+    const messages = clack.confirm.mock.calls.map(
+      (call) => (call as unknown as [{ message: string }])[0].message
+    );
+    expect(messages.some((message) => message.includes('Launch'))).toBe(false);
+    // Silently skipped as a question, but never silently as a behavior.
+    expect(captured).toContain('single platform');
+    expect(outcome.status === 'completed' && 'launch' in outcome.answers).toBe(
+      false
     );
   });
 
@@ -189,6 +262,7 @@ describe('runWizard (readline fallback)', () => {
     const { outcome, captured } = await runFallback([
       'MiniApp', // remotes
       'ios', // platform
+      'y', // launch: yes
       '', // host port: default
       '8090', // MiniApp port: override
       'n', // standalone
@@ -196,11 +270,54 @@ describe('runWizard (readline fallback)', () => {
     const expected: WizardAnswers = {
       session: { remotes: ['MiniApp'] },
       platform: 'ios',
+      launch: true,
       ports: { host: 8081, MiniApp: 8090 },
     };
     expect(outcome).toEqual({ status: 'completed', answers: expected });
     expect(captured).toContain('MiniApp');
     expect(captured).toContain('8081');
+    expect(captured).toContain('Launch the app on ios');
+  });
+
+  it('launch prompt defaults to yes on an empty answer', async () => {
+    const { outcome } = await runFallback([
+      'MiniApp', // remotes
+      'ios', // platform
+      '', // launch: empty = default yes
+      '', // host port
+      '', // MiniApp port
+      'n', // standalone
+    ]);
+    expect(outcome.status === 'completed' && outcome.answers.launch).toBe(true);
+  });
+
+  it('launch "no" records launch false', async () => {
+    const { outcome } = await runFallback([
+      'MiniApp', // remotes
+      'ios', // platform
+      'n', // launch: no
+      '', // host port
+      '', // MiniApp port
+      'n', // standalone
+    ]);
+    expect(outcome.status === 'completed' && outcome.answers.launch).toBe(
+      false
+    );
+  });
+
+  it('platform "all" never asks launch and explains the skip', async () => {
+    const { outcome, captured } = await runFallback([
+      'MiniApp', // remotes
+      '', // platform: all
+      '', // host port
+      '', // MiniApp port
+      'n', // standalone
+    ]);
+    expect(outcome.status === 'completed' && 'launch' in outcome.answers).toBe(
+      false
+    );
+    expect(captured).toContain('single platform');
+    expect(captured).not.toContain('Launch the app on');
   });
 
   it('empty answers take the defaults (all remotes, all platforms)', async () => {
