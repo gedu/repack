@@ -34,7 +34,12 @@ export interface PlanInput {
   };
   /** From the port planner; `'auto'` only in dry-run for unmanaged apps. */
   ports: Record<string, number | 'auto'>;
-  rnCliPath: string;
+  /**
+   * The `react-native` CLI for a given app root — every app runs with the
+   * CLI installed in its OWN root (callers memoize per distinct root and
+   * map resolution failures to the owning app; no cross-app fallback).
+   */
+  rnCliForRoot: (appRoot: string) => string;
 }
 
 /** Quote argv parts the way a shell display would — pure rendering. */
@@ -69,8 +74,9 @@ function buildApp(
   const bundler = detectBundler(root, appConfig);
 
   // Executed as `process.execPath <rnCli> start …`: the argv head is the
-  // resolved local react-native CLI, so PATH is never consulted.
-  const args = [input.rnCliPath, 'start', '--bundler', bundler];
+  // app's own resolved local react-native CLI, so PATH is never consulted
+  // and no other app's install is ever borrowed.
+  const args = [input.rnCliForRoot(root), 'start', '--bundler', bundler];
   if (appConfig !== undefined) args.push('--config', appConfig);
   args.push('--port', portDisplay);
   // The supervisor owns stdin and signals: children are never interactive.

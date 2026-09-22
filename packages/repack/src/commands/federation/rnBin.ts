@@ -13,40 +13,37 @@ type ResolvePackages = (
 /**
  * Resolve the app's LOCAL `react-native` CLI script to an absolute path.
  *
- * Resolution is a pure module-resolution chain — `require.resolve` over
- * `[appRoot, ...extraPaths, cwd]` — so PATH is never consulted and a
- * global `react-native` can never shadow the app's own install (threat row
- * "Executable-file classification"). The chain mirrors Node's own upward
- * `node_modules` walk, which also follows pnpm's symlinked layout: the
- * returned path is the real, absolute script file.
+ * Resolution is a pure module-resolution chain rooted at `appRoot` alone —
+ * Node's upward `node_modules` walk from the app's own directory (which
+ * also follows pnpm's symlinked layout) — so PATH is never consulted and
+ * neither the caller's cwd nor any other app's install can stand in for
+ * this app's own CLI (threat row "Executable-file classification"). An
+ * app rooted where react-native does not resolve is an error for THAT
+ * app; callers must not fall back to another root — federation-dev names
+ * the failing app and exits 2.
  *
  * The plan executes the result as `process.execPath <cli.js> …` — spawning
  * the `.bin/react-native` shim would break under some pnpm layouts, the
  * resolved cli.js is deterministic.
  *
  * @param appRoot the app whose install owns the CLI
- * @param options.extraPaths additional resolution bases (e.g. the workspace
- * config directory), consulted after the app root
  * @param options.requireResolve resolution seam for tests only
  */
 export function resolveReactNativeBin(
   appRoot: string,
-  options: {
-    extraPaths?: string[];
-    requireResolve?: ResolvePackages;
-  } = {}
+  options: { requireResolve?: ResolvePackages } = {}
 ): string {
-  const { extraPaths = [], requireResolve = require.resolve } = options;
+  const { requireResolve = require.resolve } = options;
   let packageJsonPath: string;
   try {
     packageJsonPath = requireResolve('react-native/package.json', {
-      paths: [appRoot, ...extraPaths, process.cwd()],
+      paths: [appRoot],
     });
   } catch {
     throw new CLIError(
       `Cannot resolve the "react-native" package from ${appRoot} — ` +
         'federation-dev runs each app with its own local react-native CLI; ' +
-        'install react-native in the app (or run from inside the workspace).'
+        'install react-native in the app.'
     );
   }
 

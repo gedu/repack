@@ -6,8 +6,10 @@ import path from 'node:path';
 import { PassThrough } from 'node:stream';
 import execa from 'execa';
 import packageJson from '../../../package.json';
+import { CLIError } from '../../helpers/index.js';
 import { runAdbReverse } from '../common/runAdbReverse.js';
 import * as portPlanner from '../federation/portPlanner.js';
+import * as rnBin from '../federation/rnBin.js';
 import * as wizard from '../federation/wizard.js';
 import { federationDev } from '../federation-dev.js';
 
@@ -164,6 +166,75 @@ describe('federation-dev usage errors (exit 2, spawn nothing)', () => {
     expect(exitSpy).toHaveBeenCalledWith(2);
     expect(output()).toContain('undeclared');
     expect(output()).toContain('standalone');
+    expect(execaMock).not.toHaveBeenCalled();
+  });
+});
+
+describe('federation-dev per-app react-native CLI resolution', () => {
+  it('resolves each app CLI from its own root', async () => {
+    // Threat-adjacent semantics: the CLI an app runs with is the one
+    // installed in THAT app's root — the host's install never stands in
+    // for a remote rooted elsewhere.
+    process.chdir(path.join(FIXTURES, 'config-split-roots'));
+    await federationDev([], cliConfig, {
+      dryRun: true,
+      json: true,
+      interactive: false,
+    });
+    const plan = stdoutDocs()[0];
+    const host = plan.apps.find((app: { role: string }) => app.role === 'host');
+    const mini = plan.apps.find(
+      (app: { name: string }) => app.name === 'MiniApp'
+    );
+    expect(host.command).toContain(
+      path.join('rnbin', 'app', 'node_modules', 'react-native', 'cli.js')
+    );
+    expect(mini.command).toContain(path.join('rnbin', 'pnpmapp'));
+    expect(mini.command).not.toContain(
+      path.join('rnbin', 'app', 'node_modules', 'react-native', 'cli.js')
+    );
+    const hostCli = host.command.split(' ')[1];
+    const miniCli = mini.command.split(' ')[1];
+    expect(miniCli).not.toBe(hostCli);
+    expect(execaMock).not.toHaveBeenCalled();
+  });
+
+  it('exits 2 naming the app whose own root lacks react-native', async () => {
+    // No silent fall-back to the host's CLI: an app rooted where no
+    // react-native resolves is a usage error naming that app. jest's own
+    // resolver never truly misses inside the repo tree, so the per-root
+    // failure is driven through rnBin's documented error contract (the
+    // real MODULE_NOT_FOUND mapping is pinned in rnBin.test).
+    // realpath: the command anchors paths on process.cwd(), which realpaths
+    // /var to /private/var on macOS — compare the same absolute form.
+    const miniRoot = path.join(fs.realpathSync(tmpDir), 'mini');
+    jest
+      .spyOn(rnBin, 'resolveReactNativeBin')
+      .mockImplementation((root: string) => {
+        if (root === miniRoot) {
+          throw new CLIError(
+            `Cannot resolve the "react-native" package from ${root}`
+          );
+        }
+        return '/resolved/react-native/cli.js';
+      });
+    fs.mkdirSync(miniRoot);
+    fs.writeFileSync(
+      path.join(tmpDir, 'repack-federation.json'),
+      JSON.stringify({
+        host: { manifest: './build/host', root: '.' },
+        remotes: { MiniApp: { manifest: './build/mini', root: 'mini' } },
+      })
+    );
+    process.chdir(tmpDir);
+    await federationDev([], cliConfig, {
+      apps: 'MiniApp',
+      dryRun: true,
+      interactive: false,
+    });
+    expect(exitSpy).toHaveBeenCalledWith(2);
+    expect(output()).toContain('MiniApp');
+    expect(output()).toContain(miniRoot);
     expect(execaMock).not.toHaveBeenCalled();
   });
 });

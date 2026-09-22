@@ -28,6 +28,7 @@ react-native start --bundler <rspack|webpack> [--config <resolved config>] --por
 - `--config` is passed only when the app declares a `config` field in `repack-federation.json` (or you pick one in the wizard); without it the child does its own config discovery, exactly like plain `react-native start` today.
 - The bundler per app is auto-detected the same way `start` does it — from the resolved config file name — and a per-app `--bundler` mismatch never happens because each child resolves only its own.
 - `--no-reverse-port` on every child: adb reversal is the runner's job, not the children's (see [adb](#adb-and-run-guidance)).
+- Each app is started with the `react-native` CLI resolved from **its own root** (Node's upward `node_modules` walk from the app directory — PATH is never consulted). An app rooted where `react-native` does not resolve exits 2 naming that app; the runner never borrows another app's CLI.
 
 ## The interactive session (wizard)
 

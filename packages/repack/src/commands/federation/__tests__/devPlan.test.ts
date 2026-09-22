@@ -18,7 +18,7 @@ const baseInput = () => ({
   session: { remotes: ['MiniApp'] },
   overrides: {},
   ports: {},
-  rnCliPath: RN_CLI,
+  rnCliForRoot: () => RN_CLI,
 });
 
 describe('buildPlan session set and ordering', () => {

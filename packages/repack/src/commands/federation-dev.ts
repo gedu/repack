@@ -173,14 +173,33 @@ export async function federationDev(
   }
 
   const configDir = path.dirname(filePath);
-  const hostRoot = path.resolve(configDir, config.host.root ?? '.');
-  let rnCliPath: string;
-  try {
-    rnCliPath = resolveReactNativeBin(hostRoot, { extraPaths: [configDir] });
-  } catch (error) {
-    usageError(error instanceof Error ? error.message : String(error));
-    return;
+  // Each app runs with the react-native CLI resolved from its OWN root —
+  // memoized per distinct root (single-dir twins resolve once) and an
+  // unresolvable root fails as a usage error naming that app. No silent
+  // fall-back to another app's install.
+  const namesByRoot = new Map<string, string[]>();
+  const noteRoot = (name: string, root: string) => {
+    namesByRoot.set(root, [...(namesByRoot.get(root) ?? []), name]);
+  };
+  noteRoot('host', path.resolve(configDir, config.host.root ?? '.'));
+  for (const [name, remote] of Object.entries(config.remotes)) {
+    noteRoot(name, path.resolve(configDir, remote.root ?? '.'));
   }
+  const cliByRoot = new Map<string, string>();
+  const rnCliForRoot = (root: string): string => {
+    const cached = cliByRoot.get(root);
+    if (cached !== undefined) return cached;
+    try {
+      const cli = resolveReactNativeBin(root);
+      cliByRoot.set(root, cli);
+      return cli;
+    } catch (error) {
+      const names = namesByRoot.get(root)?.join(', ') ?? root;
+      throw new CLIError(
+        `${names}: ${error instanceof Error ? error.message : String(error)}`
+      );
+    }
+  };
 
   // Session context before anything else speaks (start.ts logo precedent):
   // a one-shot write, while stdout is still unowned — the wizard, plan and
@@ -207,7 +226,7 @@ export async function federationDev(
       platform: args.platform === 'android' ? 'android' : args.platform,
     },
     ports: {},
-    rnCliPath,
+    rnCliForRoot,
   };
 
   let effective: PlannedApp[];
