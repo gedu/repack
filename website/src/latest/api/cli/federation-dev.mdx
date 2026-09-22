@@ -52,7 +52,7 @@ The remotes to include in the session. Unknown names exit 2 and list the known o
 
 - Type: `string`
 
-Compiles scope: it is passed to each child dev server (`start --platform …`) and selects the run-guidance line (`react-native run-ios` / `run-android`). Any other value (e.g. `web`) exits 2 — the bundler compile scope only supports the two native platforms.
+Compiles scope: it is passed to each child dev server (`start --platform …`) and selects the run-guidance line (`react-native run-ios` / `run-android`). Any other value (e.g. `web`) exits 2 — the bundler compile scope only supports the two native platforms. When no platform is selected (no flag, wizard leaves it unset), the guidance names both `run-ios` and `run-android`. The guidance always follows the effective platform in the final plan, so a wizard selection counts even without the flag.
 
 ### `--port <port>`
 
@@ -104,7 +104,7 @@ Every other key is a deliberate no-op. The terminal (raw mode, cursor state) is 
 
 - The **host** port is reversed automatically through the react-native CLI's audited adb helper, once, for all connected devices.
 - **Remote** ports are never adb-touched automatically — the runner prints the exact command for you: `adb reverse tcp:<port> tcp:<port>`.
-- A final guidance line names the run command for the chosen platform and the host URL the app dials.
+- A final guidance line names the run command for the effective platform from the final plan (both `run-ios` and `run-android` when none was selected) and the host URL the app dials.
 
 ## Exit codes
 

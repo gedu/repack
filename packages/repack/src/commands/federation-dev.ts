@@ -321,7 +321,12 @@ export async function federationDev(
   // remote ports are printed guidance only — the runner never executes adb
   // for them (threat row "adb execution").
   const host = plan.find((app) => app.role === 'host')!;
-  const platform = args.platform ?? 'ios';
+  // The effective platform lives in the final plan (flags and wizard
+  // answers both land there as `--platform <p>` on every child) — reading
+  // args directly would print the flag's value over a wizard selection.
+  const platformFlagIndex = host.spawn.args.indexOf('--platform');
+  const platform =
+    platformFlagIndex >= 0 ? host.spawn.args[platformFlagIndex + 1] : undefined;
   await runAdbReverse({ port: host.port as number });
   for (const app of plan) {
     if (app.role === 'remote') {
@@ -331,8 +336,11 @@ export async function federationDev(
       );
     }
   }
+  const runTargets = platform
+    ? `run-${platform}`
+    : 'run-ios or run-android (pick your device)';
   runnerConsole.log(
-    `Run your app with: react-native run-${platform} — it reaches the host ` +
+    `Run your app with: react-native ${runTargets} — it reaches the host ` +
       `dev server at ${host.url}`
   );
   // The keymap disclosure (D5 row F): exactly these keys do something.

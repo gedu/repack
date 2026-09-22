@@ -333,6 +333,57 @@ describe('federation-dev live session', () => {
     expect(exitSpy).toHaveBeenLastCalledWith(0);
   }, 20000);
 
+  it('run guidance follows --platform android', async () => {
+    const command = federationDev([], cliConfig, {
+      apps: 'MiniApp',
+      platform: 'android',
+      interactive: false,
+    });
+    await waitFor(() => execaMock.mock.calls.length === 2);
+    expect(output()).toContain('run-android');
+    expect(output()).not.toContain('run-ios');
+    for (const child of children) child.emit('exit', 0, null);
+    await command;
+  }, 20000);
+
+  it('run guidance follows the wizard platform, not the absent flag', async () => {
+    // Wizard answer overrides: no --platform flag, wizard picks android —
+    // the printed line must say run-android (the plan, not args, is truth).
+    const originalIsTTY = process.stdout.isTTY;
+    process.stdout.isTTY = true;
+    try {
+      jest.spyOn(wizard, 'runWizard').mockResolvedValue({
+        status: 'completed',
+        answers: {
+          session: { remotes: ['MiniApp'] },
+          platform: 'android',
+          ports: {},
+        },
+      } as never);
+      // No --apps and no --no-interactive: the wizard gate is open on a TTY.
+      const command = federationDev([], cliConfig, {});
+      await waitFor(() => execaMock.mock.calls.length === 2);
+      expect(output()).toContain('run-android');
+      expect(output()).not.toContain('run-ios');
+      for (const child of children) child.emit('exit', 0, null);
+      await command;
+    } finally {
+      process.stdout.isTTY = originalIsTTY;
+    }
+  }, 20000);
+
+  it('run guidance names both platforms when none is selected', async () => {
+    const command = federationDev([], cliConfig, {
+      apps: 'MiniApp',
+      interactive: false,
+    });
+    await waitFor(() => execaMock.mock.calls.length === 2);
+    expect(output()).toContain('run-ios');
+    expect(output()).toContain('run-android');
+    for (const child of children) child.emit('exit', 0, null);
+    await command;
+  }, 20000);
+
   it('--json live emits a parseable plan doc and status docs ending exited', async () => {
     // OS-assigned ports inside a workspace under the fixtures tree (so the
     // repo's react-native stays resolvable): well-known 8081/8082 may be
