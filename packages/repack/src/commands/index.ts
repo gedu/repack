@@ -1,9 +1,11 @@
 import { bundle } from './bundle.js';
+import { federationDev } from './federation-dev.js';
 import { federationDoctor } from './federationDoctor.js';
 import { federationInit } from './federationInit.js';
 import { federationManifest } from './federationManifest.js';
 import {
   bundleCommandOptions,
+  federationDevCommandOptions,
   federationDoctorCommandOptions,
   federationInitCommandOptions,
   federationManifestCommandOptions,
@@ -53,6 +55,13 @@ const federationCommands = [
     description: 'Inspect a federation manifest from a file, directory or URL.',
     options: federationManifestCommandOptions,
     func: federationManifest,
+  },
+  {
+    name: 'federation-dev',
+    description:
+      'Run the host and selected remotes from repack-federation.json as one supervised dev session, with plan preview via --dry-run.',
+    options: federationDevCommandOptions,
+    func: federationDev,
   },
   {
     name: 'federation-doctor',

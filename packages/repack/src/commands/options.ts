@@ -163,6 +163,46 @@ export const federationInitCommandOptions = [
   },
 ];
 
+export const federationDevCommandOptions = [
+  {
+    name: '--apps <list>',
+    description:
+      'Comma-separated remotes to run for this session (default: every remote in repack-federation.json)',
+  },
+  {
+    name: '--platform <platform>',
+    description: 'App platform to print run guidance for: "ios" or "android"',
+  },
+  {
+    name: '--port <port>',
+    description:
+      'Host dev-server port (overrides the port declared in repack-federation.json)',
+    parse: (val: string) => Number(val),
+  },
+  {
+    name: '--auto-ports',
+    description: 'Reassign busy ports to free ones instead of failing',
+  },
+  {
+    name: '--standalone <remote>',
+    description:
+      'Launch the named remote in standalone mode (requires it to declare "standalone": true)',
+  },
+  {
+    name: '--no-interactive',
+    description: 'Skip the interactive session wizard and use the default plan',
+  },
+  {
+    name: '--json',
+    description: 'Print the plan and status as machine-readable JSON',
+  },
+  {
+    name: '--dry-run',
+    description:
+      'Print the plan a live run would use and exit without spawning anything',
+  },
+];
+
 export const bundleCommandOptions = [
   {
     name: '--entry-file <path>',

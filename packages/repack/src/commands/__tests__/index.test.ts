@@ -3,6 +3,7 @@ import commands, { createBoundCommands } from '../index.js';
 import type { BundleArguments, CliConfig, StartArguments } from '../types.js';
 
 jest.mock('../bundle.js');
+jest.mock('../federation-dev.js');
 jest.mock('../federationDoctor.js');
 jest.mock('../federationInit.js');
 jest.mock('../federationManifest.js');
@@ -73,6 +74,9 @@ describe('command registry', () => {
       expect.arrayContaining([
         expect.stringMatching(/^federation-init/),
         'federation-doctor',
+        // federation-dev is a flat command too: discoverable by plain name,
+        // no positional to declare, outside createBoundCommands.
+        'federation-dev',
         expect.stringMatching(/^federation-manifest/),
       ])
     );

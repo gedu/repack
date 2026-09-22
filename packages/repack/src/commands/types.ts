@@ -63,6 +63,24 @@ export interface FederationDoctorArguments {
   dryRun?: boolean;
 }
 
+export interface FederationDevArguments {
+  /** Comma-separated remote names; absent means every declared remote. */
+  apps?: string | string[];
+  platform?: string;
+  /** Host dev-server port; parsed Number, range-checked by the command. */
+  port?: number;
+  /** Reassign busy declared ports instead of failing with a conflict. */
+  autoPorts?: boolean;
+  /** Remote to launch in standalone mode, gated by the file declaration. */
+  standalone?: string;
+  /** False with --no-interactive: suppresses the interactive wizard. */
+  interactive?: boolean;
+  /** Machine-readable plan/status documents on stdout. */
+  json?: boolean;
+  /** Print the plan and spawn nothing. */
+  dryRun?: boolean;
+}
+
 export interface FederationInitArguments {
   /** Name of the remote to scaffold. */
   name?: string;
