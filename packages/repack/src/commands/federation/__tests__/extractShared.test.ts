@@ -103,6 +103,24 @@ describe('extractAppShared', () => {
     }
   });
 
+  it('discovers a single init-style rspack.<name> config when no conventional file exists', async () => {
+    // federation-init generates `rspack.<remote>.mts` — not a conventional
+    // name. dry-run extraction must still find it when it is the only
+    // rspack-prefixed config in the app dir.
+    const extracted = await extractAppShared(appDir('remote-generated'));
+
+    expect(extracted.name).toBe('store');
+    expect(extracted.shared).toEqual([
+      expect.objectContaining({ name: 'react', eager: false }),
+    ]);
+  });
+
+  it('refuses to guess between several init-style configs', async () => {
+    await expect(extractAppShared(appDir('ambiguous'))).rejects.toThrow(
+      ConfigEvalError
+    );
+  });
+
   it('rejects an app directory with no bundler configuration at all', async () => {
     const emptyDir = fs.mkdtempSync(path.join(os.tmpdir(), 'repack-nocfg-'));
     try {

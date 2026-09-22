@@ -76,6 +76,20 @@ describe('federation-manifest command', () => {
     expect(exit).not.toHaveBeenCalled();
   });
 
+  it('ignores a non-string argv[0] (commander options object) and uses --source', async () => {
+    // RN CLI >= 17 passes the parsed options object as argv[0] whenever no
+    // positional was captured; it must not be mistaken for the source.
+    await federationManifest(
+      [{ source: HOST_FILE, json: true }] as unknown as string[],
+      cliConfig,
+      { source: HOST_FILE, json: true }
+    );
+
+    expect(log).toHaveBeenCalledTimes(1);
+    expect(JSON.parse(log.mock.calls[0][0] as string).name).toBe('shell');
+    expect(exit).not.toHaveBeenCalled();
+  });
+
   it('exits 2 when no source is given', async () => {
     await federationManifest([], cliConfig, {});
 

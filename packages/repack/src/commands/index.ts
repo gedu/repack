@@ -46,7 +46,10 @@ const bundlerCommands = [
 
 const federationCommands = [
   {
-    name: 'federation-manifest',
+    // Optional positional declared in the name: RN CLI >= 17 routes plugin
+    // commands through commander, which only forwards positionals that the
+    // command name declares — otherwise argv[0] is the options object.
+    name: 'federation-manifest [source]',
     description: 'Inspect a federation manifest from a file, directory or URL.',
     options: federationManifestCommandOptions,
     func: federationManifest,
@@ -59,7 +62,8 @@ const federationCommands = [
     func: federationDoctor,
   },
   {
-    name: 'federation-init',
+    // Positional declaration required for RN CLI >= 17 (see federation-manifest).
+    name: 'federation-init [feature-folder]',
     description:
       'Scaffold a new federation remote from a feature folder: scanned deps, versionless defineShared configs and workspace registration, all diffed before any write.',
     options: federationInitCommandOptions,

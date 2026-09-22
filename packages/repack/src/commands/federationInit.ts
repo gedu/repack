@@ -70,7 +70,9 @@ export async function federationInit(
     return;
   }
 
-  const folderArg = argv[0];
+  // RN CLI >= 17 hands `argv` the commander-parsed values; an uncaptured
+  // optional positional surfaces as the options object, never a path.
+  const folderArg = typeof argv[0] === 'string' ? argv[0] : undefined;
   if (!folderArg) {
     fail(
       'No feature folder given: pass the folder to scaffold as the first ' +

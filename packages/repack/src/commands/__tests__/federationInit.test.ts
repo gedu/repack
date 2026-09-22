@@ -102,6 +102,21 @@ describe('federation-init refusals — exit 2, clear message, no writes', () => 
     expect(hashTree(root)).toEqual(before);
   });
 
+  it('treats a non-string argv[0] (commander options object) as no folder given', async () => {
+    // RN CLI >= 17 passes the parsed options object as argv[0] whenever no
+    // positional was captured; path.resolve must never receive it.
+    const before = hashTree(root);
+    await federationInit(
+      [{ name: 'store' }] as unknown as string[],
+      cliConfigFor(root),
+      { name: 'store' }
+    );
+
+    expect(stderr()).toContain('No feature folder given');
+    expect(exit).toHaveBeenCalledWith(2);
+    expect(hashTree(root)).toEqual(before);
+  });
+
   it('requires --name', async () => {
     await federationInit(
       [path.join(root, 'features', 'store')],

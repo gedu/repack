@@ -52,17 +52,34 @@ describe('createBoundCommands', () => {
 });
 
 describe('command registry', () => {
+  test('commands reading a positional argument declare it in the name', () => {
+    // @react-native-community/cli >= 17 wires plugin commands through
+    // commander: a positional that is not declared in the command name never
+    // reaches `func` — argv[0] carries the parsed options object instead and
+    // `react-native federation-manifest <dir>` crashes in path.resolve.
+    // Optional positional declarations make the CLI pass the value through.
+    const names = commands.map((command) => command.name);
+    expect(names).toEqual(
+      expect.arrayContaining([
+        'federation-manifest [source]',
+        'federation-init [feature-folder]',
+      ])
+    );
+  });
+
   test('federation-init is a flat command alongside the other federation commands', () => {
     const names = commands.map((command) => command.name);
     expect(names).toEqual(
       expect.arrayContaining([
-        'federation-init',
+        expect.stringMatching(/^federation-init/),
         'federation-doctor',
-        'federation-manifest',
+        expect.stringMatching(/^federation-manifest/),
       ])
     );
 
-    const init = commands.find((command) => command.name === 'federation-init');
+    const init = commands.find((command) =>
+      command.name.startsWith('federation-init')
+    );
     // Flat RN-CLI command object: name/description/options/func, no
     // subcommand tree.
     expect(typeof init?.func).toBe('function');
@@ -73,6 +90,8 @@ describe('command registry', () => {
 
   test('federation-init is not exposed through the deprecated bound entry points', () => {
     const names = createBoundCommands('webpack').map((command) => command.name);
-    expect(names).not.toContain('federation-init');
+    expect(names.some((name) => name.startsWith('federation-init'))).toBe(
+      false
+    );
   });
 });

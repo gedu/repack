@@ -1,3 +1,4 @@
+import fs from 'node:fs';
 import path from 'node:path';
 import { buildSharedEntries } from '../../plugins/federationManifest/shared.js';
 import type { FederationManifestSharedEntry } from '../../plugins/federationManifest/types.js';
@@ -39,6 +40,42 @@ function messageOf(error: unknown): string {
   return error instanceof Error ? error.message : String(error);
 }
 
+/**
+ * `rspack.<name>.<ext>` / `webpack.<name>.<ext>` — the shape federation-init
+ * generates for scaffolded remotes (`rspack.store.mts`). Not conventional
+ * bundler entry names, but a tool-generated workspace should not need a
+ * conventional name for the tool's own checks to find its configs.
+ */
+const TOOLING_STYLE_CONFIG = /^(rspack|webpack)\..+\.(mts|cts|ts|mjs|cjs|js)$/;
+
+/**
+ * Last-resort discovery for app dirs that carry a tool-generated config
+ * instead of a conventional `rspack.config.*`: use it only when the choice
+ * is unambiguous — one rspack-style file wins (bundler preference order),
+ * otherwise one webpack-style file; several candidates is a guess, and the
+ * dry-run never guesses.
+ */
+function discoverToolingStyleConfigPath(root: string): string | null {
+  let candidates: string[];
+  try {
+    candidates = fs.readdirSync(root);
+  } catch {
+    return null;
+  }
+  const byBundler = { rspack: [] as string[], webpack: [] as string[] };
+  for (const entry of candidates) {
+    const match = TOOLING_STYLE_CONFIG.exec(entry);
+    if (match) byBundler[match[1] as 'rspack' | 'webpack'].push(entry);
+  }
+  const preferred =
+    byBundler.rspack.length === 1
+      ? byBundler.rspack
+      : byBundler.rspack.length === 0 && byBundler.webpack.length === 1
+        ? byBundler.webpack
+        : null;
+  return preferred ? path.join(root, preferred[0]) : null;
+}
+
 function discoverConfigPath(root: string, customPath?: string): string {
   // Same discovery order the bundler commands use (rspack first), with an
   // explicit --config-style path always winning.
@@ -50,11 +87,16 @@ function discoverConfigPath(root: string, customPath?: string): string {
   try {
     return getConfigFilePath('webpack', root, customPath);
   } catch {
-    throw new ConfigEvalError(
-      `No bundler configuration found in ${root} — the dry-run reads the ` +
-        'shared setup from the app rspack or webpack configuration.'
-    );
+    // fall through to the tool-generated naming
   }
+  if (customPath === undefined) {
+    const toolingStyle = discoverToolingStyleConfigPath(root);
+    if (toolingStyle !== null) return toolingStyle;
+  }
+  throw new ConfigEvalError(
+    `No bundler configuration found in ${root} — the dry-run reads the ` +
+      'shared setup from the app rspack or webpack configuration.'
+  );
 }
 
 /**

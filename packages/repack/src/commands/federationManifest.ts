@@ -19,7 +19,11 @@ export async function federationManifest(
   _cliConfig: CliConfig,
   args: FederationManifestArguments
 ) {
-  const source = argv[0] ?? args.source;
+  // RN CLI >= 17 hands `argv` the commander-parsed values; an uncaptured
+  // optional positional surfaces as the options object, never a path. Only
+  // trust a string; anything else falls through to `--source`.
+  const positional = typeof argv[0] === 'string' ? argv[0] : undefined;
+  const source = positional ?? args.source;
   if (!source) {
     console.error(
       'No manifest source given. Pass it as the first argument or with ' +
